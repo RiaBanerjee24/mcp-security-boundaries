@@ -1,0 +1,4 @@
+mcp_servers_all.json
+__pycache__/
+*.pyc
+.DS_Store
