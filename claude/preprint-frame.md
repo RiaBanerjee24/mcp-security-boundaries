@@ -65,6 +65,24 @@ Explicitly **not** trying to:
   measure — that's the whole point of it being silent)
 - fix the npx/uvx majority (different problem, different fix, out of scope)
 
+**Repeated trap, watch for it (came up twice already) — get this sentence
+exactly right in the abstract:**
+- WRONG: "how much rug-pull can we eliminate by file-hashing" — this claims
+  an *outcome* (attacks prevented), which needs knowing how many real
+  rug-pulls happen. Unmeasurable — that's the whole point of them being
+  silent.
+- RIGHT: "how much of the real MCP ecosystem is even *structurally reachable*
+  by file-level integrity checking at all" — a coverage/architecture
+  question (can the defense even be pointed at this deployment), not an
+  effectiveness question (does it stop attacks here).
+- One more layer, from the import-mutation work: even inside the reachable
+  13.5%–27.4%, a naive single-file hash (what Tooldex does today) only
+  catches entry-point changes, not changes delivered via an imported
+  dependency. So the % is an **upper bound on what file-hashing of any kind
+  could ever reach** — not a measure of what today's specific
+  implementation actually protects, and *nowhere near* a measure of attacks
+  prevented.
+
 ---
 
 ## 4. Method
