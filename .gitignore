@@ -2,3 +2,6 @@ mcp_servers_all.json
 __pycache__/
 *.pyc
 .DS_Store
+scripts/vendor/*/node_modules/
+scripts/vendor/*/dist/
+scripts/experiment_*/isolated_trust_store.json

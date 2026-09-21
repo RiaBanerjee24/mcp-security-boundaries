@@ -1,12 +1,32 @@
 # Progress report — MCP tool integrity gap research
 
-Status as of 2026-09-17, end of the second working session. **This session
-substantially pivoted the project.** Read this whole file before touching
-`research-plan.md` or `preprint-frame.md` — both are now partially stale
-(see "File status" at the bottom) and this file is the current source of
-truth.
+Status as of 2026-09-21, end of the fourth working session. **All four
+planned experiments are now built, real, and independently verified —
+this is the current state, superseding everything below about Gap 2
+being "not yet run."** Read this whole file before touching
+`research-plan.md` or `preprint-frame.md` — both are stale (see "File
+status" at the bottom) and this file is the current source of truth.
 
-## The research question (current, final wording — supersedes prior sessions)
+## Git history note — read before assuming any file's history is complete
+
+Partway through this session, a `git pull`/reset discovered that this
+session's own earlier combined-architecture rewrite (a local commit,
+"more brainsortimng," containing a fully restructured `preprint.md`,
+`progress-report.md`, `preprint-frame.md`, plus `steps.md` and
+`short-version.md`) had diverged from `origin/main` and was never
+pushed. A separate machine had, in parallel, pushed real experiment
+scaffolding (`scripts/experiment_1/`, `scripts/experiment_2/`) built on
+an *earlier* point in the history. Pulling reset this checkout to
+`origin/main`, which kept the real code but dropped this session's
+writing commit — it's not deleted, just orphaned (recoverable via
+`git show 7201b49` as long as reflog hasn't expired it). Per explicit
+instruction, that divergence was **not reconciled** — all work since has
+built forward from `origin/main`'s state, not merged with the dangling
+commit. `steps.md` and `short-version.md` are consequently gone from
+disk and were not recreated. If you want that dangling content back,
+check reflog before it expires; don't assume it's silently gone forever.
+
+## The research question (current, final wording)
 
 Every current MCP "rug-pull" defense hashes or signs some subset of a
 tool's *declared interface* (name, description, schema), never its
@@ -14,70 +34,111 @@ implementation. That specific gap is already known/self-acknowledged by
 several tools — proving it exists again is not the contribution. What
 hasn't been done: (1) a **precise, field-by-field audit** of exactly what
 every real, currently-deployed defense actually covers and exactly where
-each one stops, and (2) showing that **even the best of them — full
-source-file hashing — has its own further boundary**: it covers the
-entry-point file only, not what that file imports. The contribution is
-locating both boundaries with precision nobody else has, and closing the
-second one with a minimal, working reference fix (a whole-dependency-
-closure hash), not just describing it.
+each one stops, and (2) showing that **even the best of them has its own
+further boundary**, demonstrated in three nested layers on a real
+reference server, not asserted: interface vs. implementation (Gap 1),
+local closure vs. package-manager dependency (Gap 2), and any static
+hash at all vs. a dormant, threshold-gated trigger (Gap 3) — plus a
+combined run showing a static+canary architecture together catches all
+three, which neither layer catches alone.
 
-Two nested claims, not one:
-- **Gap 1** (interface vs. implementation): proven, done, reproducible.
-- **Gap 2** (entry-point-only vs. dependency closure): structured, not yet
-  run — this is the one remaining piece of real work.
+Three nested claims, all done:
+- **Gap 1** (interface vs. implementation): proven, real server, reproducible.
+- **Gap 2** (local closure vs. package-manager dependency): proven, real
+  server, real dependency, calls the real `tooldex` package directly —
+  **and corrected a wrong assumption this project started with about
+  Tooldex along the way** (see below).
+- **Gap 3** (any static hash vs. a dormant trigger): proven, real server,
+  reproducible.
+- **Combined run**: all three scenarios together against a unified
+  static+canary decision rule — built, reproducible.
 
 ## What's done and verified
 
-### 1. The preprint draft exists: `preprint.md` (repo root)
+### 1. The preprint draft: `preprint.md` (repo root)
 
-Full draft written this session. Structure: intro + explicit terminology
-scoping (§1.1 — "rug pull" means *interface-preserving implementation
-change*, explicitly distinguished from two other things the industry calls
-"rug pull," see below) → threat model (§2) → the field-level audit table
-(§3, fully populated) → Experiment 1/Gap 1 results (§4, fully populated,
-real data) → Experiment 2/Gap 2 structure (§5, **marked TODO, not yet
-run**) → discussion/limitations/conclusion (scaffolded with TODOs for
-things that need your judgment, not more research).
+Fully rewritten this session to match. Structure: intro + terminology
+scoping (§1.1) → threat model (§2) → the field-level audit table (§3,
+corrected — see below) → Experiment 1/Gap 1 (§4, real numbers) →
+Experiment 2/Gap 2 (§5, real numbers, corrected finding) → Experiment
+3/Gap 3 (§6, real numbers) → discussion/limitations/conclusion
+(renumbered §7-9, updated for three gaps not two).
 
-**The single most important remaining task is finishing §5**: run the
-import-mutation variant (mutate a module the entry point imports, not the
-entry point itself) and show (a) wire hash unchanged, (b) entry-point-only
-file hash unchanged (the point — Tooldex's current approach misses this),
-(c) a whole-closure hash (`sha256(sorted(sha256(f) for f in [entry_point]
-+ resolved_local_imports))`) changed, (d) real output changed. Everything
-else in the draft is either finished or is a writing/judgment task for the
-user, not a research task.
+**Nothing is left as a TODO placeholder for results** — all three
+experiments and the combined run have real, reproducible numbers pasted
+into the document. Remaining TODOs are genuinely just writing/judgment
+calls (the abstract, the conclusion's final prose), not research tasks.
 
-### 2. Experiment 1 (Gap 1) — unchanged from prior session, still valid
+### 2. A correction discovered mid-build, not assumed away
 
-`mock_servers/echo_server.py` + `scripts/experiment_rug_pull.py`. Real,
-reproducible result:
-```
-v1 wire hash: a106160309d014fa20c1af3cffcc508933e08578db3a4a5cbaf37ff5bf009e68
-v2 wire hash: a106160309d014fa20c1af3cffcc508933e08578db3a4a5cbaf37ff5bf009e68  <- UNCHANGED
-v1 file hash: 8f831f7c05511dd115dac2d4e0097a3dd38ed2255ff08644ef7bb20dee2c1520
-v2 file hash: c63dd65062059591d2f2d09d1c012d93b9229eb9075b9fa12b3c5e0d00abb1e7  <- CHANGED
-v1 output: 'hello'
-v2 output: 'hello | riabanerjee'  <- CHANGED (real leak, not simulated)
-```
-Rerun: `cd Tooldex-research && uv run --no-project --python 3.14 --with mcp python3 scripts/experiment_rug_pull.py`
-Script self-restores v1 at the end; safe to rerun.
+The original plan for Gap 2 assumed Tooldex's `trust_store.py` hashes
+only the entry-point file. **Checked directly** (`inspect.getsource` on
+the real, published v1.0.2 package): it already walks *down* from the
+entry point's own directory, hashing every recognized local source file
+in that tree — much closer to a "whole-closure hash" than this project
+originally gave it credit for. What it deliberately excludes, per its
+own docstring, is package-manager-installed dependency directories
+(`node_modules`, `venv`, `.venv`, `env`). This reframed Gap 2 from "any
+imported file" (not real, as it turns out) to "specifically a
+package-manager-delivered compromise" (real, demonstrated in Experiment
+2) — a sharper, more realistic finding than the original plan, found by
+checking rather than assuming.
 
-### 3. The field-level audit table (`preprint.md` §3) — new this session, the core related-work contribution
+### 3. All four experiments — real server, real code, built and verified twice (this machine and the user's)
 
-Every row was verified by reading the primary source directly this
-session (not paraphrased from a secondary summary):
+All four live in `scripts/experiment_{1,2,3,4}/`, sharing one vendored,
+unmodified copy of Anthropic's real `filesystem` MCP reference server in
+`scripts/vendor/filesystem-server/` (not committed — gitignored
+`node_modules`/`dist`). Each has a `README.md` with exact run
+instructions and a `Dockerfile`; every one of the four was built AND run
+in Docker, not just written, before being reported as working — and the
+user independently reproduced Experiments 1 and 2 on their own machine
+with byte-for-byte identical hashes.
+
+- **Experiment 1 (Gap 1)**: mutates `readTextFileHandler` (defined
+  inline in the server's own `index.ts`) to leak the OS username. Wire
+  hash unchanged, file hash changed, real output changed.
+- **Experiment 2 (Gap 2)**: mutates `minimatch`, a real npm dependency
+  the server actually uses (via `lib.ts`'s `searchFilesWithValidation`).
+  Calls Tooldex's real `trust_store.set_decision()` /
+  `files_changed_since_approval()` directly — not a reimplementation.
+  Wire hash, Tooldex's real check, and a local-closure hash all miss it;
+  a new lockfile-depth hash (hash-of-hashes over the resolved
+  `node_modules/minimatch/` directory) catches it. Hit and fixed a real
+  bug: minimatch's ESM `exports` map resolves `import` to
+  `dist/esm/index.js`, not `dist/commonjs/index.js` (the `main`
+  field/`require` condition) — mutating the wrong file silently changed
+  nothing, caught by testing each file in isolation before trusting
+  either result.
+- **Experiment 3 (Gap 3)**: writes a module-level call counter and a
+  threshold-gated branch into `index.ts` *once* — normal for calls 1-3,
+  a leak on call 4 — never mutated again mid-run. One live session, four
+  calls. Wire hash and local-closure hash identical before/after the
+  whole session (nothing on disk ever changes); a canary baseline from
+  call 1 catches call 4's deviation. Structurally different from
+  Experiments 1/2: not "the hash looked in the wrong place," but "there
+  was nothing for any hash to ever see change."
+- **Experiment 4 (combined run)**: not a new gap — orchestrates the same
+  three mutations against one unified static layer (local-closure +
+  lockfile-depth, as one hash) and one canary layer, under a combined
+  decision rule. Result: rows 1 and 2 caught by the static layer alone;
+  row 3 (the dormant trigger) caught *only* because of the canary
+  layer — the entire argument for the combined architecture in one
+  table.
+
+### 4. The field-level audit table (`preprint.md` §3) — corrected
 
 | Defense | Covers | Stops at |
 |---|---|---|
-| ETDI (arXiv 2506.01333) | name, description, schema, permissions, optional hash of backend *API contract* (OpenAPI/Swagger) | the API contract, not backend code — read the exact quote below |
+| ETDI (arXiv 2506.01333) | name, description, schema, permissions, optional hash of backend *API contract* (OpenAPI/Swagger) | the API contract, not backend code |
 | mcpseal | name, description, schema | self-acknowledged limitation |
 | hardened-mcp-server | raw wire object, best of 20 policies | self-acknowledged limitation |
 | mcp-pin / Plumbline | name, description, schema, annotations (RFC 8785) | confirmed via its own 2026-09-03 finding doc — still metadata-only |
 | Vercel AI SDK `detectToolDrift` (`ai@7.0.19`, shipped July 2026) | description, resolved schema, title | metadata-only, shipped mainstream SDK feature with the same blind spot |
 | MCP Manager (mcpmanager.ai) Feature Governance | name, title, description | confirmed directly from their docs — no schema, no implementation |
-| Microsoft APM (`microsoft.github.io/apm`, `github.com/microsoft/apm`) | full content hash of declared agent-context packages, via lockfile | **install-time only**; `apm audit` is manual/opt-in and diffs local hand-edits vs. the lockfile, not upstream changes; different artifact class (agent-context packages, not a live MCP server at the moment of tool invocation) |
-| Tooldex `trust_store.py` | full byte content of entry-point file | entry point only — does not follow imports (this is Gap 2) |
+| Microsoft APM (`microsoft.github.io/apm`, `github.com/microsoft/apm`) | full content hash of declared agent-context packages, via lockfile | **install-time only**; different artifact class |
+| **Tooldex `trust_store.py`** | full content of every recognized local file, walking *down* from the entry point's own directory — **corrected this session, was previously and incorrectly characterized as entry-point-only** | explicitly excludes `node_modules`/`venv`/etc. by design (this is Gap 2) |
+| This work (Gap 3) | the above **+** a canary output check across repeated calls | nothing left within this project's own demonstrated scope; generalizing canary-input selection to arbitrary tools remains open |
 
 **Key new-this-session finding on ETDI**, worth having verbatim since it's
 a strong citation: ETDI's own PDF (§ "Preventing Rug Pulls") says *"if the
@@ -126,21 +187,21 @@ valid, not re-litigated today.
 
 ## What's next (in order)
 
-1. **Run Experiment 2 / Gap 2** (§5 of `preprint.md`) — the one real
-   remaining research task. Decide toy (split echo into two files) vs.
-   real-server variant (find a reference server whose logic already lives
-   in an imported module) — toy is faster and sufficient given the 4-day,
-   solo constraint; real-server is stronger if time allows. Either way,
-   produce the four-signal table (wire hash / entry-point file hash /
-   whole-closure hash / output) and paste it into §5.
-2. Write the abstract and conclusion (§Abstract, §8) — deliberately left
-   for last, per standard practice, and marked TODO in the draft.
-3. Decide whether to keep or cut `preprint.md` §6.3 (the paragraph
+All research/implementation work is done. What's left is writing and
+judgment calls, not new experiments:
+
+1. Write the abstract (§Abstract) and conclusion (§9) — deliberately left
+   for last, per standard practice, both scaffolded with guidance already.
+2. Decide whether to keep or cut `preprint.md` §7.3 (the paragraph
    explaining why the population-measurement direction was dropped) —
    recommended to keep, short, as already drafted.
-4. Fill remaining citation TODOs in `preprint.md` References (exact repo
+3. Fill remaining citation TODOs in `preprint.md` References (exact repo
    URLs for hardened-mcp-server and mcpseal; Clinejection incident
    source).
+4. Optional, not required: decide whether to pursue any of the explicitly
+   out-of-scope extensions named in §6 (the `npx`/`uvx` canary extension,
+   the organic-traffic canary variant, non-deterministic-tool support) —
+   none of these are needed to consider the current draft complete.
 
 ## Explicitly ruled out this session (don't re-propose without new information)
 

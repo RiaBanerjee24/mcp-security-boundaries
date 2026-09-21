@@ -1,4 +1,4 @@
-# Where MCP Tool Integrity Checks Stop: A Field-Level Comparison and a Minimal Closure-Hash Fix
+# Where MCP Tool Integrity Checks Stop: A Field-Level Comparison and a Minimal Lockfile-Depth Fix
 
 **Author:** Ria Banerjee
 **Status:** Draft — sections marked `TODO` need your input/results before submission.
@@ -10,15 +10,25 @@ interests are declared.
 
 ## Abstract
 
-> **TODO (you):** write last, 150–200 words. Should state: (1) every current
-> MCP "rug-pull" defense hashes or signs some subset of a tool's *declared
-> interface*, never its implementation; (2) even the obvious fix — hashing
-> the server's source file, which we demonstrate is necessary and sufficient
-> against interface-preserving behavior changes — has its own boundary: it
-> only covers the entry-point file, not what that file imports; (3) we give
-> a field-by-field audit of seven real, currently-deployed defenses showing
-> none reach the dependency closure, and a minimal reference
-> implementation, extending a reproducible test harness, that does.
+> **TODO (you):** write last, 150–200 words. Should state: (1) every
+> current MCP "rug-pull" defense hashes or signs some subset of a tool's
+> *declared interface*, never its implementation — demonstrated on a
+> real reference server (Anthropic's official `filesystem` MCP server),
+> not a hand-built example; (2) the obvious fix — hashing the server's
+> local files — turns out to already be what Tooldex's real,
+> published `trust_store.py` does (a correction from this project's own
+> earlier, incorrect assumption, confirmed by reading its actual
+> source), and it is necessary but not sufficient: it stops precisely at
+> package-manager-installed dependencies, by design; (3) a second
+> experiment, against a real npm dependency the target server actually
+> uses, and calling Tooldex's real code directly (not a reimplementation),
+> shows this boundary is real and shows a minimal lockfile-depth
+> extension — specified but left unbuilt earlier in this project — that
+> closes it; (4) a third experiment shows that even that extension has a
+> structural limit — a dormant, threshold-gated trigger present from
+> first deployment, invisible to any static hash because the file never
+> changes — closed only by comparing repeated real outputs against a
+> canary baseline.
 
 ---
 
@@ -47,21 +57,31 @@ independent, actively-maintained defense projects (§3).
 **What's missing is precision, not awareness.** Every source above states
 that "interface-preserving behavior changes are a problem" in general
 terms. None of them states *exactly* where each real defense's coverage
-actually stops, and none of them closes the specific, narrower boundary
-that remains even after you adopt the most obvious fix (hashing the
-server's source file instead of its declared interface). This paper does
-both:
+actually stops. This paper does both, and corrects an assumption it
+started with along the way:
 
-1. A field-by-field audit of seven real, currently-deployed or
+1. A field-by-field audit of real, currently-deployed or
    currently-proposed MCP integrity mechanisms, showing precisely which
-   fields each one covers and where each one stops (§3).
-2. A reproducible demonstration that even the best of these — full
-   source-file hashing — has its own uncovered boundary: it does not
-   follow the file's imports (§4, §5, Gap 2).
-3. A minimal reference implementation that closes that boundary by hashing
-   the full dependency closure instead of a single file, and a
-   demonstration that it catches what every other approach in the audit
-   misses (§5).
+   fields each one covers and where each one stops (§3) — including
+   reading Tooldex's own real, published source directly rather than
+   assuming its scope, which overturned this project's own earlier
+   characterization of it as entry-point-only.
+2. A reproducible demonstration, on a real reference server rather than
+   a hand-built example, that wire-level interface hashing misses a
+   schema-preserving behavior change (§4, Gap 1).
+3. A second reproducible demonstration, against a real npm dependency
+   and Tooldex's real code (not a reimplementation), that even Tooldex's
+   actual local-closure hash — already more complete than this project
+   first assumed — stops precisely at package-manager-installed
+   dependencies, and that a minimal lockfile-depth extension, run here
+   for the first time rather than only specified, closes that boundary
+   (§5, Gap 2).
+4. A third reproducible demonstration that no static hash — however
+   complete, including the lockfile-depth extension from Gap 2 — can
+   ever detect a malicious trigger present from first deployment that
+   never touches disk again, and that only comparing a tool's own real
+   output across repeated calls against a canary baseline catches it
+   (§6, Gap 3).
 
 ### 1.1 Terminology scope (read this before citing "rug pull" elsewhere)
 
@@ -93,7 +113,11 @@ breaks into your laptop":
 - **Compromised transitive dependency.** The entry-point file is
   untouched; a package it imports gets a malicious version pushed to
   PyPI/npm. Real precedent: **Clinejection**, a malicious npm package
-  version live for ~8 hours, February 2026.
+  version live for ~8 hours, February 2026. §5 demonstrates the exact
+  mechanism this describes, not just its plausibility: a real npm
+  dependency (`minimatch`) of a real reference server, mutated in place,
+  invisible to wire hashing and to Tooldex's real, current
+  `trust_store.py` alike.
   > **TODO (you):** add the exact source/link for the Clinejection incident
   > if you want it citable rather than referenced from memory.
 - **Compromised upstream repository.** A locally-run server is a cloned
@@ -113,6 +137,29 @@ None of these require defeating anything at the protocol layer — they all
 land as an ordinary file-content change, which is exactly the layer none
 of the defenses in §3 inspect.
 
+**This is not a rare pattern at real ecosystem scale.** A Snyk-owned
+project (`snyk/agent-scan`, issue #482) measured, across 7,949
+multi-version MCP servers and 59,821 real release transitions in the
+public registry, that **74.6%** of releases kept the tool's presented
+interface identical while the resolved package version changed
+underneath. That figure isn't a measurement of malicious activity — most
+of those releases are ordinary, benign updates — but it confirms that
+"interface stays constant while the implementation changes" is the
+*overwhelmingly common* shape of a real MCP release, not a contrived
+edge case invented for this paper. Any defense that stops at the
+interface is structurally blind to the large majority of real update
+activity, benign or malicious, by this measurement.
+
+That same issue proposes a different dynamic signal than this paper
+builds: watching for *capability expansion* at runtime (newly-accessed
+network hosts, secrets, or filesystem writes) rather than comparing a
+tool's own output against a canary baseline. A real, credible,
+differently-shaped answer to the same motivating problem — closer to
+the OS/process-level runtime monitoring family (§3) than to this
+paper's deterministic canary check — not evaluated here, but worth
+knowing it exists as an alternative, not a competing claim on the same
+mechanism.
+
 ---
 
 ## 3. Field-level audit of current MCP integrity mechanisms
@@ -129,14 +176,18 @@ summary) to confirm the exact scope of what it checks.
 | **Vercel AI SDK** (`fingerprintTools`/`detectToolDrift`, `ai@7.0.19`, July 2026) | description, resolved input schema, title | On demand, baseline storage is the app's responsibility | No |
 | **MCP Manager** (Feature Governance) | name, title, description (developer-selectable granularity) | Per allowlist check | No — explicitly no schema or implementation matching |
 | **Microsoft APM** | full content hash of declared agent-context packages (skills, prompts, MCP servers), via lockfile | **Install-time only**; `apm audit` is manual/opt-in and diffs local hand-edits, not upstream changes | Partial — hashes real content, but for a different artifact class (agent-context packages, not a live MCP server at the moment of tool invocation) and without automatic per-call re-verification |
-| **Tooldex `trust_store.py`** | full byte content of the entry-point file | On connect | **No** — entry point only; does not follow imports |
-| **This work (proposed, §5)** | full byte content of entry-point file **+** all locally-resolved imports | On connect | **Yes** |
+| **Tooldex `trust_store.py`** | full content of every recognized local source file reachable by walking *down* from the entry point's own directory — confirmed by reading the real, published v1.0.2 source directly (`inspect.getsource`), not assumed | On connect | **Partial** — correctly covers the local closure (this is *not* entry-point-only, correcting an earlier, incorrect characterization in this project); explicitly excludes package-manager dependency directories (`node_modules`, `venv`, `.venv`, `env`) by design — "pinning an entire node_modules tree is a different, impractical problem," per its own docstring |
+| **This work (demonstrated, §5)** | Tooldex's real local-closure hash **+** a hash-of-hashes over the resolved `node_modules` (or equivalent) dependency directory | On connect | **Yes**, for local files and installed package-manager dependencies both |
 
-**Reading the table:** every row stops at a different boundary, but all
-seven existing rows stop *before* the dependency closure. Tooldex's own
-file hash — the strongest of the existing, deployed options — is
-necessary but not sufficient, which is the specific, previously
-unstated gap this paper closes.
+**Reading the table:** every row stops at a different boundary. Tooldex's
+own hash — the strongest of the existing, deployed options, and already
+closer to a full local-closure hash than this project originally gave it
+credit for — is necessary but not sufficient: it stops precisely at the
+boundary of package-manager-installed dependencies, deliberately, by its
+own design. That specific, previously unquantified boundary — not "does
+Tooldex hash more than one file" (it already does) but "does anything
+reach inside an installed dependency" (nothing does) — is the gap this
+paper closes.
 
 > **TODO (you):** if you find a defense not in this table, verify its exact
 > scope by reading primary docs/source directly (not a blog summary)
@@ -146,103 +197,253 @@ unstated gap this paper closes.
 
 ## 4. Experiment 1 — the interface/implementation gap is real (Gap 1)
 
-**Setup:** `mock_servers/echo_server.py`, an MCP server with a single tool
-`echo(text: str) -> str`. `scripts/experiment_rug_pull.py` snapshots it,
-edits only the function body (name, docstring/description, and signature
-byte-for-byte unchanged) so it leaks `$USER` into the response, and
-compares three signals before/after via real MCP protocol calls
-(`tools/list`, `tools/call`) — not static inspection.
+**Setup, on a real reference server, not a toy one.** The target is
+Anthropic's own official `filesystem` MCP server
+(`modelcontextprotocol/servers`, `src/filesystem`), vendored unmodified
+into `scripts/vendor/filesystem-server/`. Not an obscure example: the
+published package gets 232,701 weekly downloads with 41 other packages
+depending on it directly, and was last updated 19 days before this was
+written — every experiment in this paper runs against code actually
+executing in a large number of real, active deployments, not a
+hypothetical one. `scripts/experiment_1/run_experiment.py`
+mutates `readTextFileHandler` — defined *inline* in the server's own
+`index.ts`, used by both the `read_file` and `read_text_file` tools — to
+append the OS username to every file read, without touching the tool's
+registered name, description, or input schema a few lines below in the
+same file. Interface byte-for-byte identical; behavior different. All
+three signals compared via real MCP protocol calls (`tools/list`,
+`tools/call`) against the server's actual TypeScript source, run
+directly via `npx tsx` (no separate build step to go stale between
+mutations) — not static inspection.
 
 - **Wire hash** — sha256 of canonicalized `{name, description,
-  inputSchema}` — replicates hardened-mcp-server's best-performing policy.
-- **File hash** — sha256 of the script's bytes — what Tooldex pins today.
-- **Real output** — an actual `tools/call("echo", {"text": "hello"})`.
+  inputSchema}` for `read_text_file` — replicates hardened-mcp-server's
+  best-performing policy.
+- **File hash** — sha256 of `index.ts`'s bytes — what a naive
+  entry-point-only hash would pin.
+- **Real output** — an actual `tools/call("read_text_file", {"path": "hello.txt"})`
+  against a real fixture file.
 
 **Result** (reproducible — rerun with
-`uv run --no-project --python 3.14 --with mcp python3 scripts/experiment_rug_pull.py`):
+`uv run --no-project --with mcp python3 scripts/experiment_1/run_experiment.py`,
+or via `scripts/experiment_1/Dockerfile`; see its README for exact commands):
 
 ```
-v1 wire hash: a106160309d014fa20c1af3cffcc508933e08578db3a4a5cbaf37ff5bf009e68
-v2 wire hash: a106160309d014fa20c1af3cffcc508933e08578db3a4a5cbaf37ff5bf009e68  <- UNCHANGED
-v1 file hash: 8f831f7c05511dd115dac2d4e0097a3dd38ed2255ff08644ef7bb20dee2c1520
-v2 file hash: c63dd65062059591d2f2d09d1c012d93b9229eb9075b9fa12b3c5e0d00abb1e7  <- CHANGED
-v1 output: 'hello'
-v2 output: 'hello | riabanerjee'  <- CHANGED (real leak, not simulated)
+v1 wire hash: 1d8b2b6ca5e1073726f4f41ba61ac8c888d2867157d6cf12547c55051c7f482a
+v2 wire hash: 1d8b2b6ca5e1073726f4f41ba61ac8c888d2867157d6cf12547c55051c7f482a  <- UNCHANGED
+v1 file hash: bff21de612c59d64b351f70615f44563f0efe76666a75aa52450ebe6fae6584a
+v2 file hash: df22fe18a5b18f77443ffde9e8da4b02450ad20be7c9abe3a9fcf21cb420469e  <- CHANGED
+v1 output: 'hello world\n'
+v2 output: 'hello world\n\n[leaked-user:ria]'  <- CHANGED (real leak, not simulated)
 ```
 
 **Reading:** wire-level hashing — what six of the seven existing defenses
-in §3 rely on — does not detect the change. File hashing does. This
-confirms, mechanically rather than by assertion, the limitation that
-mcpseal, mcp-pin, and hardened-mcp-server each already state about
-themselves in their own documentation.
+in §3.1 rely on — does not detect the change, on Anthropic's own real,
+popular reference implementation, not a hand-built example. File hashing
+does. This confirms, mechanically rather than by assertion and on real
+production code, the limitation that mcpseal, mcp-pin, and
+hardened-mcp-server each already state about themselves in their own
+documentation.
 
-> **TODO (you):** this section's data is already final and reproducible —
-> nothing to fill in here unless you want to add a second toy mutation
-> variant.
+> **TODO (you):** data is final and reproducible. This replaces the
+> earlier toy-echo-server version of this experiment — see
+> `scripts/experiment_1/README.md` for the exact mutation and the
+> ESM-vs-CommonJS gotcha that came up building Experiment 2 (§5), worth
+> knowing about if you extend this to a different tool.
 
 ---
 
-## 5. Experiment 2 — even file hashing has a boundary (Gap 2)
+## 5. Experiment 2 — even Tooldex's real local-closure hash has a boundary (Gap 2)
 
-**Motivation:** §3's table shows Tooldex's file hash is the strongest
-*deployed* option, but it only covers the entry-point file. If the
-mutation is delivered through a module that file imports rather than the
-file itself, the entry-point hash is unaffected.
+**Motivation, corrected from the original plan.** The original framing
+assumed Tooldex's `trust_store.py` hashes only the entry-point file. That
+assumption was wrong, and checking it directly is what this section
+actually demonstrates. Read from the real, published source
+(`inspect.getsource(trust_store)`, v1.0.2): it already walks *down* from
+the entry point's own directory, hashing every recognized local source
+file in that tree. What it deliberately excludes, per its own docstring,
+is package-manager-installed dependency directories — `node_modules`,
+`venv`, `.venv`, `env` — "pinning an entire node_modules tree is a
+different, impractical problem." So the real boundary isn't "any
+imported file"; it's specifically a compromise delivered through a
+package-manager dependency. That's what this experiment demonstrates,
+using a dependency the target server already actually uses — not a
+hand-placed stand-in.
 
-**Setup:**
+**Setup, on the same real server as Experiment 1, calling Tooldex's real
+code, not a reimplementation.** `scripts/experiment_2/run_experiment.py`
+mutates `minimatch` — a real npm package the `filesystem` server imports
+and calls from `lib.ts`'s `searchFilesWithValidation`, used by the
+`search_files` tool for both its main pattern match and its
+`excludePatterns` check — so that `minimatch()` always returns `true`.
+Real consequence: `search_files` with pattern `*.txt` starts returning
+every file in the searched directory, not just `.txt` files, including
+one that was never supposed to match at all. The experiment calls
+Tooldex's actual `trust_store.set_decision()` and
+`files_changed_since_approval()` functions directly, from the real
+`tooldex==1.0.2` PyPI release.
 
-> **TODO (you):** decide and document which of the two variants you ran:
->
-> **(a) Toy variant** — split `echo_server.py` into two files
-> (`echo_server.py`, which imports `echo_logic.py`). Mutate only
-> `echo_logic.py`. Cleanest to build, but should be labeled explicitly as
-> an isolated illustration, not evidence from a real deployed server.
->
-> **(b) Real-server variant** — if you have time, find a real reference
-> server (e.g. from `modelcontextprotocol/servers`) whose tool logic
-> already lives in an imported helper module rather than inline in the
-> entry point, and mutate that module instead. Stronger claim, more setup.
+One implementation detail that mattered and is worth recording: the
+server's `package.json` has `"type": "module"`, so `import { minimatch }`
+resolves via minimatch's own `exports` map's `"import"` condition
+(`dist/esm/index.js`), not the `"require"` condition
+(`dist/commonjs/index.js`, also minimatch's legacy `main` field).
+Mutating the CommonJS file first produced a build that ran fine but
+changed nothing observable — confirmed by testing each file in isolation
+before trusting either result, not assumed.
 
-**Signals to compare** (same three as Experiment 1, **plus a fourth**):
+**Four signals, not three:**
 
-- Wire hash — expected unchanged (same as Gap 1)
-- **Entry-point-only file hash** (what Tooldex does today) — expected
-  **unchanged**, since the entry-point file itself was not touched
-- **Whole-closure hash** (entry point + imported module, concatenated or
-  Merkle-combined) — expected **changed**
-- Real output — expected changed
+- **Wire hash** — expected unchanged (schema untouched).
+- **Tooldex's real `files_changed_since_approval()`** — expected to say
+  unchanged (node_modules pruned by design — this is the point).
+- **Local-closure hash** — this project's original Gap-2-era proposal
+  (entry point + local siblings, still no `node_modules`) — expected
+  *also* unchanged, for the same reason: it's a narrower restatement of
+  what Tooldex already does, not an extension past it.
+- **Lockfile-depth hash** — a hash-of-hashes over the resolved
+  `node_modules/minimatch/` directory, established as a baseline and
+  re-checked later, the same mechanism as the closure hash applied one
+  level deeper — expected **changed**. This is the §4.1-equivalent
+  extension this project had previously left as specified-but-not-built;
+  this is the first time it's actually run.
+- **Real output** — expected changed.
 
-> **TODO (you):** run the experiment, paste the four-signal table here in
-> the same format as §4. This is the load-bearing result of the paper —
-> everything in §3 and §6 depends on this table actually showing what's
-> predicted above.
+**Result** (reproducible — rerun with
+`uv run --no-project --with tooldex==1.0.2 --with mcp python3 scripts/experiment_2/run_experiment.py`,
+or via `scripts/experiment_2/Dockerfile`; see its README for exact commands):
 
 ```
-[ TODO — results table goes here, same format as Experiment 1 ]
-
-v1 wire hash:              ...
-v2 wire hash:              ...   <- expect UNCHANGED
-v1 entry-point file hash:  ...
-v2 entry-point file hash:  ...   <- expect UNCHANGED  (this is the point)
-v1 whole-closure hash:     ...
-v2 whole-closure hash:     ...   <- expect CHANGED
-v1 output:                 ...
-v2 output:                 ...   <- expect CHANGED
+v1 wire hash:            41f144836f5e786009e2173256759e37b687add572cfba808e24bebb9a04ce96
+v2 wire hash:             41f144836f5e786009e2173256759e37b687add572cfba808e24bebb9a04ce96  <- UNCHANGED
+v1 local-closure hash:    cbfe87a6e127f67f017f5a544586948a01904f1ea8aaaf7477b2ca94f0ea9c31
+v2 local-closure hash:    cbfe87a6e127f67f017f5a544586948a01904f1ea8aaaf7477b2ca94f0ea9c31  <- UNCHANGED
+v1 lockfile-depth hash:   1f9396b09daf5a67335c2ecc6fac29cce9797b22f2827f3de219bb5c7b67a143
+v2 lockfile-depth hash:   f21580de5e6a6ae921a21fff647857d8a7ee1bb3e6d2d621d7f61345ec91db63  <- CHANGED
+v1 output: '.../a.txt', '.../b.txt'
+v2 output: '.../a.txt', '.../b.txt', '.../secret.env'  <- CHANGED (real leak, not simulated)
+Tooldex's real files_changed_since_approval(): False
 ```
 
-**Reference implementation note:** the whole-closure hash does not require
-new cryptography — it's `sha256(sorted(sha256(f) for f in [entry_point] +
-resolved_local_imports))`, i.e. exactly the "hash of hashes" pattern
+**Reading:** a real npm dependency compromise is invisible to wire
+hashing, invisible to Tooldex's real, current `trust_store.py`, and
+invisible to this project's own originally-proposed local-closure
+hash — all three stop at the same boundary, `node_modules`, deliberately
+excluded by design in Tooldex's case. Only extending the hash to the
+resolved dependency's own directory — the lockfile-depth extension —
+catches it. This is a sharper, more realistic version of "Gap 2" than
+originally planned: not an artificial sibling-file split, but the actual
+delivery mechanism most real supply-chain compromises use.
+
+**Reference implementation note:** the lockfile-depth hash does not
+require new cryptography — it's the same "hash of hashes" pattern
+(`sha256(sorted(sha256(f) for f in resolved_package_dir.rglob("*")))`)
 already standard practice in npm's `package-lock.json` `integrity` field
-and pip's `--require-hashes` lockfiles (§6.2), applied at the point an MCP
-client decides to trust a tool call rather than at package-install time
-(which is where Microsoft APM applies the same pattern — see §3, APM row).
+and pip's `--require-hashes` lockfiles (§7.2), just applied to the
+resolved on-disk package directory as a drift baseline rather than
+re-verified against the original published tarball each time — a
+narrower, honestly-scoped property (catches drift since *your* approval,
+not compromise before it) matching what the local-closure hash already
+does one level up.
 
 ---
 
-## 6. Discussion
+## 6. Experiment 3 — a dormant trigger defeats every static hash (Gap 3)
 
-### 6.1 What this does and does not claim
+**Motivation.** Experiments 1 and 2 both show a hash *missing* a change
+because it isn't looking in the right place — the file itself, or a
+dependency. This experiment asks a structurally different question: can
+any static hash — wire-level, local-closure, or even the lockfile-depth
+extension that closed Experiment 2's gap — detect a malicious trigger
+that was present in the code from the moment it was deployed and never
+touches disk again afterward? It cannot, not because the hash is
+incomplete, but because there is nothing on disk for it to ever see
+change.
+
+This is not a hypothetical framing invented for this paper. The same
+pattern — a server that behaves honestly for a number of calls before
+defecting once some threshold is crossed — is independently named and
+benchmarked as a real threat class ("TrustShift") in published research
+on staged MCP server compromise (["TrustShiftProbe"](https://arxiv.org/pdf/2608.23763),
+arXiv 2608.23763), and is separately reported as a real incident by
+[`mcp-behaviour-guard`](https://github.com/hacker-vs-cracker/mcp-behaviour-guard)'s
+own findings ("Deadbugz"): a server behaving normally for three calls
+before changing behavior on the fourth.
+
+**Setup, on the same real server as Experiments 1 and 2.**
+`scripts/experiment_3/run_experiment.py` writes `index.ts` *once* — a
+module-level call counter and a threshold-gated branch inside
+`readTextFileHandler`: normal behavior for the first 3 calls, a leak
+appended starting on the 4th. Unlike Experiments 1 and 2, this file is
+never rewritten mid-run — the counter's state lives in the running
+process's memory, not on disk, which is exactly what makes it invisible
+to a hash taken at any point in that lifetime. One server process, one
+live session, four calls made within it — not a fresh process per
+call — because the trigger's state has to persist across calls the way
+it would for a real long-running MCP session.
+
+**Four signals:**
+
+- **Wire hash** — taken once, mid-session — expected unchanged.
+- **Local-closure hash** — taken once before the session and once
+  after — expected **identical both times**. The load-bearing result:
+  not "unchanged between two versions" as in Experiments 1/2, but
+  "unchanged because there was never a second version."
+- **Canary output hash** — the first call's output, hashed and treated
+  as a baseline; every later call's output compared against it —
+  expected to match for calls 1–3, mismatch on call 4.
+- **Real output** — expected identical for calls 1–3, different on
+  call 4.
+
+**Result** (reproducible — rerun with
+`uv run --no-project --with mcp python3 scripts/experiment_3/run_experiment.py`,
+or via `scripts/experiment_3/Dockerfile`):
+
+```
+local-closure hash before the session: 85d698f77adc594353b2f7fdcdadbc6ecda4013e68f4d9fd577dbc29f18efe02
+local-closure hash after 4 calls:      85d698f77adc594353b2f7fdcdadbc6ecda4013e68f4d9fd577dbc29f18efe02  <- IDENTICAL
+wire hash (taken once, mid-session):   1d8b2b6ca5e1073726f4f41ba61ac8c888d2867157d6cf12547c55051c7f482a
+
+call 1: 'hello world\n'                          [matches canary baseline]
+call 2: 'hello world\n'                          [matches canary baseline]
+call 3: 'hello world\n'                          [matches canary baseline]
+call 4: 'hello world\n\n[leaked-user:ria]'        [MISMATCH — flagged]
+```
+
+**Reading:** across the entire session, the file on disk never changes,
+so both the wire hash and the local-closure hash are identical whether
+taken before the first call or after the last. Every static check in
+this paper's own toolkit — including the fix that closed Gap 2 — reports
+"unchanged" the whole time. Only comparing each call's real output
+against a canary baseline established from an earlier call catches the
+change, and only on the exact call where it actually happens.
+
+**Combined run.** `scripts/experiment_4/run_experiment.py` runs all
+three scenarios above back to back against one unified static layer
+(local-closure hash + the resolved dependency directory, as one
+hash-of-hashes) and one canary layer, under the combined decision rule
+from §4.3 — flag if either layer moves. Not a new experiment; the same
+mutations and signals already built for Experiments 1–3, orchestrated
+together. Reproducible result:
+
+```
+Scenario                         Static     Canary     Combined
+1 — interface-preserving edit    CHANGED    CHANGED    CAUGHT
+2 — dependency compromise        CHANGED    CHANGED    CAUGHT
+3 — dormant trigger              unchanged  CHANGED    CAUGHT
+```
+
+Row 3 is the entire argument for the combined architecture in one line:
+it is the only row where the static layer — even including the
+lockfile-depth extension that closed Gap 2 — reports nothing wrong,
+because nothing on disk ever changed. The canary layer catches it
+regardless, and the combined rule catches every row.
+
+---
+
+## 7. Discussion
+
+### 7.1 What this does and does not claim
 
 - **Does claim:** a specific, previously-unstated structural boundary
   exists in every current MCP integrity mechanism, at two nested levels
@@ -256,8 +457,8 @@ client decides to trust a tool call rather than at package-install time
 - **Does not claim:** this fixes the majority of real MCP deployments.
   Servers launched via `npx`/`uvx` fetch code fresh from a registry with
   no stable local file at all; whole-closure hashing, like plain file
-  hashing, cannot apply to them. That is a different problem needing a
-  different fix (§6.3).
+  hashing, cannot apply to them — this is specific to *hashing*, not a
+  limit on integrity verification in general (§7.3 names the distinction).
 - **Does not claim** that closing this gap "eliminates" rug-pull risk even
   where it applies. Hashing is a *detection* mechanism; ETDI's own paper
   notes "users are unlikely to scrutinize a tool they believe they have
@@ -265,7 +466,7 @@ client decides to trust a tool call rather than at package-install time
   clicked through. This paper's contribution stops at detection coverage,
   not human response to detection.
 
-### 6.2 Why "hash of hashes," not a full Merkle tree
+### 7.2 Why "hash of hashes," not a full Merkle tree
 
 A full Merkle tree earns its cost when you need partial proofs (verify one
 dependency without the full set) or operate at a scale where O(log n)
@@ -274,7 +475,7 @@ machinery — a flat hash over the sorted set of per-file hashes gives the
 same tamper-evidence property. Noting this explicitly to avoid
 over-engineering a solution to a small-scale problem.
 
-### 6.3 The population question — deliberately out of scope here
+### 7.3 The population question — deliberately out of scope here
 
 An earlier direction for this project attempted to measure what fraction
 of real-world MCP deployments are even local-file-launched (as opposed to
@@ -312,36 +513,78 @@ included here because:
 > for cutting: it spends words on what the paper *isn't* rather than what
 > it is. Recommend keeping it short, as drafted, not expanding it.
 
+**Why this is a hashing-specific limit, not a general one — named here,
+not built here.** Everything above is about hashing specifically, which
+structurally requires a stable local file. A different technique —
+calling the tool over the protocol with a fixed input and checking its
+response, rather than reading its bytes — has no such requirement: it
+works identically whether the server was launched from a local script,
+`npx some-package`, or `uvx some-tool`, because it never touches the
+filesystem at all — §6's canary check is exactly this technique, though
+demonstrated there for the dormant-trigger case, not yet for extending
+reach to `npx`/`uvx`-launched servers specifically. This paper
+deliberately keeps its demonstrated scope to local-file servers (§4,
+§5) and does not build or test the `npx`/`uvx` extension. Two things
+would need solving first, and
+are named here rather than left as a vague gesture at future work: (1)
+whether an existing behavioral/transport-boundary defense already covers
+this implicitly, simply by not caring how the server started, which
+would need checking before claiming it as new; and (2) a tolerance model
+for legitimate version churn — an `npx`-launched server can resolve to a
+newer, entirely legitimate release between sessions with nothing
+malicious happening, so a behavioral baseline for such a server needs to
+distinguish that from an actual rug pull, unlike a pinned local file,
+which only changes when something — legitimate or not — actually edits
+it.
+
 ---
 
-## 7. Limitations
+## 8. Limitations
 
 - **Small-N, hand-verified case study, not a population measurement.**
-  Deliberate, per §6.3 — not a weakness to apologize for at length, just
+  Deliberate, per §7.3 — not a weakness to apologize for at length, just
   to state plainly.
 - **Single implementer, single pass.** No independent replication yet.
-- **Toy or single-example real-server mutation** (per which variant is
-  chosen in §5) — generalization to arbitrary real servers is illustrative,
-  not exhaustive.
+- **All three experiments run against the same single real server**
+  (Anthropic's official `filesystem` reference implementation) — not a
+  toy example, but also not evidence across multiple, diverse real
+  servers. Generalization beyond this one codebase is illustrative, not
+  exhaustive.
 - **No adoption or effectiveness claim.** This paper does not measure
   whether any client actually implements whole-closure hashing, nor
   whether users respond correctly to a triggered re-approval prompt.
+- **Deliberately local-file scope only.** `npx`/`uvx`-launched servers
+  are out of reach for hashing specifically, not for integrity
+  verification in general — §7.3 names, but does not build, a
+  non-hashing path that could reach them.
+- **Gap 3's canary check is deterministic and single-tool.** It compares
+  one fixed-input call's output against a baseline from an earlier
+  identical call — it does not address a non-deterministic tool (an
+  LLM-backed one, for instance) where repeated calls to unchanged code
+  would legitimately produce different output, nor does it generalize
+  the choice of canary input to arbitrary tools.
 
-> **TODO (you):** add anything else you know is a real weakness once
-> Experiment 2 is finished — reviewers trust a limitations section more
-> when it's specific rather than boilerplate.
+> **TODO (you):** add anything else you know is a real weakness —
+> reviewers trust a limitations section more when it's specific rather
+> than boilerplate.
 
 ---
 
-## 8. Conclusion
+## 9. Conclusion
 
-> **TODO (you):** 3–5 sentences. Suggested shape: restate the two nested
-> gaps, restate that this is the first paper to locate them this
-> precisely across seven real, named, currently-deployed defenses, restate
-> the minimal reference fix and that it's demonstrated (not just proposed)
-> to close Gap 2, and close with the population-scale question (§6.3) as
-> the explicit next-paper pointer rather than something this paper
-> attempts.
+> **TODO (you):** 3–5 sentences. Suggested shape: restate the three
+> nested gaps (interface, dependency, dormancy), note that locating
+> Gap 2 precisely required correcting this project's own initial
+> assumption about Tooldex (not entry-point-only, as it turns out —
+> confirmed by reading the real source, not assumed), restate that all
+> three are demonstrated on the same real reference server, the second
+> against a real npm dependency and Tooldex's real code (not toy
+> examples or reimplementations), restate the lockfile-depth fix and
+> that it's demonstrated (not just proposed) to close Gap 2, restate
+> that Gap 3 shows a structural limit no static hash — however
+> complete — can ever cross, closed only by the canary check, and close
+> with the population-scale question (§7.3) as the explicit next-paper
+> pointer rather than something this paper attempts.
 
 ---
 
@@ -380,6 +623,24 @@ included here because:
     Defend against Supply Chain Attacks" — https://arxiv.org/pdf/2502.06662
 14. hardened-mcp-server (jkelly-dev1) — repository, direct doc quote in §3
 15. mcpseal (confuseddude) — repository, direct doc quote in §3
+16. `modelcontextprotocol/servers`, official MCP reference server
+    implementations (target of Experiments 1–3) —
+    https://github.com/modelcontextprotocol/servers
+17. `minimatch`, real npm dependency mutated in Experiment 2 —
+    https://www.npmjs.com/package/minimatch
+18. Tooldex `trust_store.py`, real code called directly in Experiment 2 —
+    https://pypi.org/project/tooldex/1.0.2/
+19. "TrustShiftProbe: Characterizing, Benchmarking, and Defending Staged
+    Trust Attacks on MCP Servers" — https://arxiv.org/pdf/2608.23763
+20. `mcp-behaviour-guard`, incl. the "Deadbugz" delayed-activation
+    finding, cited in §6 —
+    https://github.com/hacker-vs-cracker/mcp-behaviour-guard
+21. `snyk/agent-scan`, issue #482 — the 74.6% release-transition
+    measurement and the capability-expansion proposal, cited in §2 —
+    https://github.com/snyk/agent-scan/issues/482
+22. `@modelcontextprotocol/server-filesystem`, npm package page (download
+    / dependent-package statistics cited in §4) —
+    https://www.npmjs.com/package/@modelcontextprotocol/server-filesystem
 
 > **TODO (you):** add exact repo URLs for #14–15 if not already in
 > `research-plan.md` — I have the quotes verified but should confirm the

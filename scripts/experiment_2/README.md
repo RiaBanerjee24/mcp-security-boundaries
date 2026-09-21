@@ -1,113 +1,95 @@
-# Experiment 2 — the whole-closure-hash gap (Gap 2)
+# Experiment 2 (Gap 2) — a real dependency compromise vs. a local-closure hash
 
-## What this demonstrates
+Proves, against a real reference server's real npm dependency and an
+existing local-closure hash implementation (not a reimplementation),
+that a package-manager-delivered compromise is invisible to hash-based
+checks that stop at the local file tree — and that extending the hash
+one level deeper, into the resolved dependency itself, catches it.
 
-Tooldex's real file-hash pinning (`trust_store.py`) hashes the entry
-point's *entire local directory tree*, not just the single entry file. 
-This experiment asks the next, narrower question: 
-**does that boundary have an edge of its own?**
+## What a local-closure hash actually checks
 
-`entry/entry_server.py` imports a function from `logic.py`, which lives
-in `scripts/tmp/experiment_2_external/` — a directory that is *not* a
-descendant of `entry/`'s own folder, and therefore never reached by
-Tooldex's real directory walk (which only descends from wherever the
-entry point itself lives). Only `logic.py` is ever mutated; the entry
-point's declared interface (name, description, schema) and its own file
-bytes never change.
+Read directly from real, published source (`inspect.getsource`): a
+local-closure hash walks *down* from the entry point's own directory,
+hashing every recognized local source file in that tree, but excludes
+package-manager-installed dependency directories — `node_modules`,
+`venv`, `.venv`, `env`.
 
-Four signals are compared before and after the mutation:
+So the gap this experiment targets is specifically **a compromise
+delivered through a package-manager dependency**, not an arbitrary
+imported file. It demonstrates exactly that, using a dependency the
+target server already actually uses.
 
-1. **Wire hash** — the tool's declared interface. Expected unchanged.
-2. **Tooldex's real `files_changed_since_approval()`** — called against
-   the actual installed `tooldex` package, not a reimplementation.
-   Expected to say *unchanged* — this is the boundary being demonstrated.
-3. **Whole-closure hash** — this project's proposed fix: `sha256` of the
-   sorted set of `sha256(entry_point)` and `sha256(logic.py)`. Expected
-   changed.
-4. **Real tool output** — an actual `tools/call`, not a static check.
-   Expected changed.
+## What gets mutated
 
-## Folder structure
+`minimatch`, a real npm package the `filesystem` reference server
+imports and calls from `lib.ts`'s `searchFilesWithValidation` (used by
+the `search_files` tool, both for its main pattern match and its
+`excludePatterns` check). The mutation makes `minimatch()` always return
+`true`.
 
-```
-scripts/experiment_2/
-├── entry/
-│   └── entry_server.py       # entry point — never mutated
-├── run_experiment.py          # orchestrator
-└── README.md                  # this file
+The server's `package.json` has `"type": "module"`, so
+`import { minimatch } from 'minimatch'` resolves via minimatch's own
+`exports` map's `"import"` condition — `dist/esm/index.js` — not
+`dist/commonjs/index.js` (the `"require"` condition / legacy `main`
+field). If you extend this to a different dependency, mutate whichever
+file that package's own `exports` map actually resolves for the way it's
+imported — test in isolation first to confirm the mutation is live
+before trusting any downstream result.
 
-scripts/tmp/experiment_2_external/
-└── logic.py                   # the only file mutated — runtime-managed,
-                                # gitignored, rewritten by run_experiment.py
-                                # on every run (nothing to hand-edit here)
-```
+## Real consequence
 
-`scripts/tmp/` is gitignored — its contents are pure runtime scratch, not
-static, so there's nothing to commit or maintain there beyond the
-directory existing.
+`search_files` with pattern `*.txt` starts returning every file in the
+searched directory, not just `.txt` files — including one that was
+never supposed to match at all (`secret.env` in this demo).
 
-## Running locally
+## Four signals compared
 
-Requires [`uv`](https://docs.astral.sh/uv/) and network access on first
-run (to fetch `tooldex` and `mcp`).
+1. **Wire hash** — expected unchanged (schema untouched).
+2. **A local-closure hash's real drift check** — the actual published
+   implementation, called directly, not reimplemented — expected to say
+   unchanged (`node_modules` excluded).
+3. **Local-closure hash** (entry point + its local siblings, no
+   `node_modules`) — expected *also* unchanged, for the same reason.
+4. **Lockfile-depth hash** — hash-of-hashes over the resolved
+   `node_modules/minimatch/` directory, established as a baseline and
+   re-checked later, the same mechanism as the closure hash applied one
+   level deeper — expected changed.
+5. **Real output** — expected changed.
 
-```bash
-mkdir -p ../tmp/experiment_2_external   # one-time setup, from this folder
-uv run --no-project --python 3.14 --with tooldex==1.0.2 --with mcp python3 run_experiment.py
-```
-
-The script prints wire hash / Tooldex's real hash-check / closure hash /
-real output for both the original and mutated state, then a summary
-comparing all four. It restores `logic.py` to its original content at the
-end — safe to rerun repeatedly.
-
-## Running via Docker
-
-No local `uv`/Python setup needed — everything is baked into the image at
-build time.
-
-```bash
-docker build -t experiment-2-gap2 .
-docker run --rm experiment-2-gap2
-```
-
-## Reproducibility
-
-`tooldex==1.0.2` is the real, versioned, PyPI-published Tooldex release . 
-Anyone running the exact commands above gets the identical code this experiment's results.
-
-**Expected output** (confirmed via `docker build` + `docker run`, 2026-09-20):
+## Run it
 
 ```
-=== v1 (original) ===
-  wire hash: a106160309d014fa20c1af3cffcc508933e08578db3a4a5cbaf37ff5bf009e68
-  closure hash: c40dd43a174cc8f1b11d5c6ef3ea39f6a01662f46c6f8c77edf3335515721daa
-  output: 'hello'
-
-=== v2 (mutated — external module changed, entry point untouched) ===
-  wire hash: a106160309d014fa20c1af3cffcc508933e08578db3a4a5cbaf37ff5bf009e68
-  closure hash: 90b5b9b67eeb1ed7e2eeb20da5b7c6ad4f63483594aef738d8e841b3895c0adb
-  output: 'hello | CANARY-LEAK-MARKER'
-  Tooldex's real files_changed_since_approval(): False
-
-=== Result ===
-  Wire-level hash:                    UNCHANGED — mutation NOT detected
-  Tooldex real entry-point-tree check: says UNCHANGED — mutation NOT detected (the point)
-  Whole-closure hash:                 CHANGED — mutation DETECTED
-  Real output:                        CHANGED — real behavior differs
-
-  CONFIRMED: a mutation delivered outside the entry point's local
-  directory tree is invisible to wire hashing AND to Tooldex's real
-  file-hash pinning, but caught by the whole-closure hash.
+cd mcp-security-boundaries
+uv run --no-project --with tooldex==1.0.2 --with mcp python3 scripts/experiment_2/run_experiment.py
 ```
 
-Since the closure hash depends on the exact bytes of `entry_server.py` and
-`logic.py`, it will only match exactly if neither file has been edited
-since this was recorded — the wire hash, the "unchanged"/"changed"
-verdicts, and the leaked marker in the output should match regardless.
+Requires Node/npm (shared vendored server in `../vendor/filesystem-server/`,
+same as Experiment 1) and the `tooldex` package from PyPI, used here only
+as a real, existing local-closure hash implementation to test against.
 
-## Interpreting the result
+Self-restores the mutated file at the end — safe to rerun.
 
-A mutation delivered through a
-dependency outside the entry point's own directory tree is invisible,
-but caught by the proposed whole-closure hash.
+## Or via Docker
+
+Build context must be `scripts/`:
+
+```
+docker build -f scripts/experiment_2/Dockerfile -t rugpull-exp2 scripts/
+docker run --rm rugpull-exp2
+```
+
+## Expected result
+
+```
+Wire-level hash:                  UNCHANGED
+Local-closure hash's real check:  UNCHANGED (node_modules excluded — the point)
+Local-closure hash (recomputed):  unchanged — also misses it
+Lockfile-depth hash:              CHANGED — detected
+Real output:                      CHANGED
+```
+
+Confirms that a local-closure hash is itself incomplete against the most
+realistic real-world delivery mechanism for this class of attack — a
+compromised dependency, not a hand-placed sibling file — and that
+closing it needs the lockfile-depth extension specifically, not just
+"hash more files."
