@@ -1,5 +1,36 @@
 # Progress report — MCP tool integrity gap research
 
+## Update, same-day follow-on session (2026-09-21)
+
+`preprint.md` is now a **complete draft, not just fully-experimented.**
+Since the section below was written: abstract and conclusion are written
+(not TODO placeholders); every remaining TODO in the file is resolved —
+§1.1 and §7.3 keep/cut decisions made (both kept), Clinejection now has a
+citable primary source (CSA research note + Snyk, Feb 2026), exact repo
+URLs added for hardened-mcp-server and mcpseal. The literature survey was
+also strengthened, not just cited as "done": added MCP-DPT (arXiv
+2604.07551) to §1 as an independent taxonomy that supports this paper's
+motivation without doing its audit; investigated whether Invariant Labs'
+MCP-Scan belongs in §3's field-audit table (it's frequently described
+secondhand as wire-level "Tool Pinning via hashing"), and — by actually
+`pip install`-ing the current package rather than trusting the docs —
+found `mcp-scan` on PyPI is now a redirect package to `snyk-agent-scan`
+(the same `snyk/agent-scan` repo already cited for the 74.6%
+release-transition measurement), whose current installed source has no
+rug-pull/tool-pinning code path under that name. Excluded it from the
+table rather than include an unverified claim, and turned the finding
+itself into a new Limitations bullet about documentation/implementation
+drift in this exact ecosystem. Also fixed two stale cross-references
+(`§3.1`, `§4.1`/`§4.3` — subsections that don't exist) left over from an
+earlier draft structure. Added a root `README.md` and a root
+`docker-compose.yml` (one service per experiment, `docker compose up
+--build` runs all four) — smoke-tested end to end.
+
+**What's left is a proofreading pass, not writing or research.** See
+`preprint.md`'s own status line.
+
+---
+
 Status as of 2026-09-21, end of the fourth working session. **All four
 planned experiments are now built, real, and independently verified —
 this is the current state, superseding everything below about Gap 2

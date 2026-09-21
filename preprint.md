@@ -1,7 +1,7 @@
 # Where MCP Tool Integrity Checks Stop: A Field-Level Comparison and a Minimal Lockfile-Depth Fix
 
 **Author:** Ria Banerjee
-**Status:** Draft — sections marked `TODO` need your input/results before submission.
+**Status:** Complete draft — all four experiments run and reproducible, abstract and conclusion written, all citations resolved. Ready for a proofreading pass before submission.
 **Competing interests:** The author is the sole developer of Tooldex, one
 of the eight systems evaluated in this paper (§3, §5). No other competing
 interests are declared.
@@ -10,25 +10,34 @@ interests are declared.
 
 ## Abstract
 
-> **TODO (you):** write last, 150–200 words. Should state: (1) every
-> current MCP "rug-pull" defense hashes or signs some subset of a tool's
-> *declared interface*, never its implementation — demonstrated on a
-> real reference server (Anthropic's official `filesystem` MCP server),
-> not a hand-built example; (2) the obvious fix — hashing the server's
-> local files — turns out to already be what Tooldex's real,
-> published `trust_store.py` does (a correction from this project's own
-> earlier, incorrect assumption, confirmed by reading its actual
-> source), and it is necessary but not sufficient: it stops precisely at
-> package-manager-installed dependencies, by design; (3) a second
-> experiment, against a real npm dependency the target server actually
-> uses, and calling Tooldex's real code directly (not a reimplementation),
-> shows this boundary is real and shows a minimal lockfile-depth
-> extension — specified but left unbuilt earlier in this project — that
-> closes it; (4) a third experiment shows that even that extension has a
-> structural limit — a dormant, threshold-gated trigger present from
-> first deployment, invisible to any static hash because the file never
-> changes — closed only by comparing repeated real outputs against a
-> canary baseline.
+Every current MCP "rug-pull" defense hashes or signs some subset of a
+tool's *declared interface* — name, description, input schema — never its
+implementation. This paper first audits exactly where eight real,
+currently-deployed or currently-proposed defenses each stop, reading
+primary source rather than secondary summaries, then demonstrates three
+nested boundaries on a real, popular reference server (Anthropic's
+official `filesystem` MCP server), not a hand-built example. Experiment 1
+shows wire-level interface hashing misses a schema-preserving behavior
+change that a full file hash catches. Experiment 2 corrects an assumption
+this project started with — Tooldex's real, published `trust_store.py`
+already hashes a server's entire local file tree, not just its entry
+point — and shows that even this more-complete hash stops exactly at
+package-manager-installed dependencies by design: mutating a real npm
+dependency the target server actually uses is invisible to Tooldex's own
+code, called directly, and to a local-closure hash alike, but caught by a
+minimal lockfile-depth extension demonstrated here for the first time.
+Experiment 3 shows a further, structural limit: a dormant,
+threshold-gated trigger written once at deployment and never touched
+again is invisible to any static hash, however complete, because nothing
+on disk ever changes — only comparing a tool's own repeated output
+against a canary baseline catches it. A fourth experiment runs all three
+mutations together against one unified static-plus-canary architecture,
+showing the combination catches every case that neither layer catches
+alone. All four experiments are reproducible end to end via Docker or a
+plain Python/Node toolchain. The result is a precise map of where
+today's best deployed integrity checks stop, and a minimal, working
+extension that moves that boundary one layer further — with a remaining,
+named boundary of its own.
 
 ---
 
@@ -52,7 +61,16 @@ This is not a hypothetical concern. It is named explicitly in:
 - The paper that coined the term for MCP, ETDI (arXiv 2506.01333)
 
 and it is the acknowledged, self-reported limitation of at least three
-independent, actively-maintained defense projects (§3).
+independent, actively-maintained defense projects (§3). It is also
+implicit in a defense-*placement* taxonomy published independently of any
+of the individual tools audited here: [MCP-DPT](https://arxiv.org/pdf/2604.07551)
+(arXiv 2604.07551) finds that "current defenses are uneven and frequently
+concentrate on tool-adjacent protections, while important threats
+involving host orchestration, transport assumptions, and
+registry/supply-chain mechanisms remain comparatively underdefended."
+That taxonomy classifies *where in the architecture* a defense sits; it
+does not itself audit what any single defense actually checks once it's
+there, which is precisely what §3 does.
 
 **What's missing is precision, not awareness.** Every source above states
 that "interface-preserving behavior changes are a problem" in general
@@ -99,8 +117,8 @@ by:
   low-privilege bot triggering a high-privilege workflow) — unrelated to
   tool interface integrity.
 
-> **TODO (you):** confirm you want to keep this scoping paragraph near the
-> top — it pre-empts a reviewer conflating your claim with either of those.
+Kept here deliberately, ahead of the threat model, so neither reading is
+available as a misreading by the time a reviewer reaches it.
 
 ---
 
@@ -112,14 +130,18 @@ breaks into your laptop":
 
 - **Compromised transitive dependency.** The entry-point file is
   untouched; a package it imports gets a malicious version pushed to
-  PyPI/npm. Real precedent: **Clinejection**, a malicious npm package
-  version live for ~8 hours, February 2026. §5 demonstrates the exact
-  mechanism this describes, not just its plausibility: a real npm
-  dependency (`minimatch`) of a real reference server, mutated in place,
-  invisible to wire hashing and to Tooldex's real, current
-  `trust_store.py` alike.
-  > **TODO (you):** add the exact source/link for the Clinejection incident
-  > if you want it citable rather than referenced from memory.
+  PyPI/npm. Real precedent: **Clinejection** (17 February 2026) — a
+  compromised npm publish token was used to push a malicious `cline@2.3.0`
+  to the npm registry, adding a `postinstall` script that silently
+  installed an unauthorized second AI agent on an estimated ~4,000
+  developer machines before the package was deprecated roughly eight
+  hours later ([Cloud Security Alliance research
+  note](https://labs.cloudsecurityalliance.org/research/csa-research-note-clinejection-prompt-injection-cicd-cache-p/);
+  [Snyk](https://snyk.io/blog/cline-supply-chain-attack-prompt-injection-github-actions/)).
+  §5 demonstrates the exact mechanism this describes, not just its
+  plausibility: a real npm dependency (`minimatch`) of a real reference
+  server, mutated in place, invisible to wire hashing and to Tooldex's
+  real, current `trust_store.py` alike.
 - **Compromised upstream repository.** A locally-run server is a cloned
   git repo (`git clone ... && python server.py`); a compromised maintainer
   account or a merged malicious PR lands in the next `git pull`, and the
@@ -189,9 +211,22 @@ Tooldex hash more than one file" (it already does) but "does anything
 reach inside an installed dependency" (nothing does) — is the gap this
 paper closes.
 
-> **TODO (you):** if you find a defense not in this table, verify its exact
-> scope by reading primary docs/source directly (not a blog summary)
-> before adding a row — that standard was applied to every row above.
+**A tool deliberately left out, and why.** Invariant Labs' MCP-Scan is
+widely described secondhand (its own docs included) as offering "Tool
+Pinning... via tool hashing" for rug-pull detection, which would put it
+in this table. Checking that claim directly, the way every row above was
+checked, does not confirm it: `mcp-scan`'s PyPI listing states the
+package "has been renamed to snyk-agent-scan" and now forwards to it —
+the same `snyk/agent-scan` repository already cited in §2 for its
+capability-expansion proposal and release-transition measurement, not a
+different project. Installing the current successor package
+(`snyk-agent-scan` 0.6.4) and searching its actual source for any
+rug-pull- or tool-pinning-specific hashing code path turns up nothing
+under that name. Rather than include a row built on a secondhand claim
+this project's own standard couldn't verify against real, current source,
+it's excluded — itself a small illustration of how quickly documentation
+and implementation drift apart even for the well-established projects in
+this exact space.
 
 ---
 
@@ -237,19 +272,18 @@ v1 output: 'hello world\n'
 v2 output: 'hello world\n\n[leaked-user:ria]'  <- CHANGED (real leak, not simulated)
 ```
 
-**Reading:** wire-level hashing — what six of the seven existing defenses
-in §3.1 rely on — does not detect the change, on Anthropic's own real,
-popular reference implementation, not a hand-built example. File hashing
+**Reading:** wire-level hashing — what most of the eight existing
+defenses catalogued in §3 rely on — does not detect the change, on
+Anthropic's own real, popular reference implementation, not a hand-built
+example. File hashing
 does. This confirms, mechanically rather than by assertion and on real
 production code, the limitation that mcpseal, mcp-pin, and
 hardened-mcp-server each already state about themselves in their own
 documentation.
 
-> **TODO (you):** data is final and reproducible. This replaces the
-> earlier toy-echo-server version of this experiment — see
-> `scripts/experiment_1/README.md` for the exact mutation and the
-> ESM-vs-CommonJS gotcha that came up building Experiment 2 (§5), worth
-> knowing about if you extend this to a different tool.
+See `scripts/experiment_1/README.md` for the exact mutation and run
+instructions; see §5 for an ESM-vs-CommonJS resolution detail worth
+knowing before extending this mutation approach to a different tool.
 
 ---
 
@@ -304,9 +338,8 @@ before trusting either result, not assumed.
 - **Lockfile-depth hash** — a hash-of-hashes over the resolved
   `node_modules/minimatch/` directory, established as a baseline and
   re-checked later, the same mechanism as the closure hash applied one
-  level deeper — expected **changed**. This is the §4.1-equivalent
-  extension this project had previously left as specified-but-not-built;
-  this is the first time it's actually run.
+  level deeper — expected **changed**. This extension was previously left
+  specified-but-not-built; this is the first time it's actually run.
 - **Real output** — expected changed.
 
 **Result** (reproducible — rerun with
@@ -421,8 +454,8 @@ change, and only on the exact call where it actually happens.
 **Combined run.** `scripts/experiment_4/run_experiment.py` runs all
 three scenarios above back to back against one unified static layer
 (local-closure hash + the resolved dependency directory, as one
-hash-of-hashes) and one canary layer, under the combined decision rule
-from §4.3 — flag if either layer moves. Not a new experiment; the same
+hash-of-hashes) and one canary layer, under a single combined decision
+rule — flag if either layer moves. Not a new experiment; the same
 mutations and signals already built for Experiments 1–3, orchestrated
 together. Reproducible result:
 
@@ -507,12 +540,6 @@ included here because:
   moment*, not a general supply-chain security claim, and does not
   contest that caution.
 
-> **TODO (you):** decide whether to keep this subsection or cut it
-> entirely. Arguments for keeping: pre-empts an obvious reviewer question
-> ("didn't you measure this before?"/"why not a bigger study?"). Arguments
-> for cutting: it spends words on what the paper *isn't* rather than what
-> it is. Recommend keeping it short, as drafted, not expanding it.
-
 **Why this is a hashing-specific limit, not a general one — named here,
 not built here.** Everything above is about hashing specifically, which
 structurally requires a stable local file. A different technique —
@@ -563,36 +590,52 @@ it.
   LLM-backed one, for instance) where repeated calls to unchanged code
   would legitimately produce different output, nor does it generalize
   the choice of canary input to arbitrary tools.
-
-> **TODO (you):** add anything else you know is a real weakness —
-> reviewers trust a limitations section more when it's specific rather
-> than boilerplate.
+- **The field-level audit (§3) is a snapshot of fast-moving, mostly
+  single-maintainer projects, not a stable literature.** §3's own
+  MCP-Scan finding — secondary sources describe a hashing-based "Tool
+  Pinning" feature that could not be confirmed in the current, renamed
+  successor package's actual source — is direct evidence that this
+  table can go stale in either direction (a tool gaining coverage, or
+  documentation outliving a feature) faster than a typical citation.
+  Treat §3 as accurate as of the dates in the References list, not as a
+  permanent characterization of any of these projects.
 
 ---
 
 ## 9. Conclusion
 
-> **TODO (you):** 3–5 sentences. Suggested shape: restate the three
-> nested gaps (interface, dependency, dormancy), note that locating
-> Gap 2 precisely required correcting this project's own initial
-> assumption about Tooldex (not entry-point-only, as it turns out —
-> confirmed by reading the real source, not assumed), restate that all
-> three are demonstrated on the same real reference server, the second
-> against a real npm dependency and Tooldex's real code (not toy
-> examples or reimplementations), restate the lockfile-depth fix and
-> that it's demonstrated (not just proposed) to close Gap 2, restate
-> that Gap 3 shows a structural limit no static hash — however
-> complete — can ever cross, closed only by the canary check, and close
-> with the population-scale question (§7.3) as the explicit next-paper
-> pointer rather than something this paper attempts.
+Every current MCP rug-pull defense stops at the tool's declared
+interface; this paper locates three further, nested boundaries and
+demonstrates each mechanically, on the same real reference server, rather
+than asserting them. Gap 1 shows wire-level interface hashing misses a
+schema-preserving behavior change that a full file hash catches. Locating
+Gap 2 precisely required correcting an assumption this project started
+with: Tooldex's real, published `trust_store.py` is not entry-point-only,
+as first assumed, but already hashes a server's whole local file tree —
+confirmed by reading its actual source rather than its documentation.
+What it still misses, demonstrated here against a real npm dependency and
+Tooldex's real code rather than a reimplementation, is a compromise
+delivered specifically through a package-manager-installed dependency —
+closed by a minimal lockfile-depth extension that was previously
+specified but, until this work, never actually run. Gap 3 shows a further
+limit that no static hash can cross by construction, however complete:
+a dormant, threshold-gated trigger written once at deployment and never
+touched again leaves nothing on disk for any hash to ever see change,
+and is caught only by comparing a tool's own repeated output against a
+canary baseline. A fourth, combined experiment shows a unified
+static-plus-canary architecture catching every one of these cases where
+neither layer catches all of them alone. What this paper does not
+attempt — deliberately, per §7.3 — is a population-scale measurement of
+how many real MCP deployments each gap reaches; that remains open for
+separate work, building on this paper's mechanism rather than competing
+with the ecosystem-scale census work already cited here.
 
 ---
 
 ## References
 
-> **TODO (you):** convert to your target venue's citation format. URLs
-> below were all directly verified (fetched/read primary source), not
-> taken from secondary summaries.
+URLs below were all directly verified (fetched/read primary source), not
+taken from secondary summaries.
 
 1. ETDI: Mitigating Tool Squatting and Rug Pull Attacks in MCP —
    https://arxiv.org/pdf/2506.01333
@@ -621,8 +664,10 @@ it.
     Pinning or Floating?" — https://arxiv.org/abs/2510.08609
 13. "Pinning Is Futile: You Need More Than Local Dependency Versioning to
     Defend against Supply Chain Attacks" — https://arxiv.org/pdf/2502.06662
-14. hardened-mcp-server (jkelly-dev1) — repository, direct doc quote in §3
-15. mcpseal (confuseddude) — repository, direct doc quote in §3
+14. hardened-mcp-server (jkelly-dev1) — repository, direct doc quote in §3 —
+    https://github.com/jkelly-dev1/hardened-mcp-server
+15. mcpseal (confuseddude) — repository, direct doc quote in §3 —
+    https://github.com/confuseddude/mcpseal
 16. `modelcontextprotocol/servers`, official MCP reference server
     implementations (target of Experiments 1–3) —
     https://github.com/modelcontextprotocol/servers
@@ -641,7 +686,17 @@ it.
 22. `@modelcontextprotocol/server-filesystem`, npm package page (download
     / dependent-package statistics cited in §4) —
     https://www.npmjs.com/package/@modelcontextprotocol/server-filesystem
-
-> **TODO (you):** add exact repo URLs for #14–15 if not already in
-> `research-plan.md` — I have the quotes verified but should confirm the
-> exact links are still on file before this goes out.
+23. "MCP-DPT: A Defense-Placement Taxonomy and Coverage Analysis for Model
+    Context Protocol Security", cited in §1 —
+    https://arxiv.org/pdf/2604.07551
+24. Cloud Security Alliance, "Clinejection: Prompt Injection in GitHub
+    Issue Titles Enables CI/CD Cache Poisoning and Supply Chain
+    Compromise", cited in §2 —
+    https://labs.cloudsecurityalliance.org/research/csa-research-note-clinejection-prompt-injection-cicd-cache-p/
+25. Snyk, "How 'Clinejection' Turned an AI Bot into a Supply Chain
+    Attack", corroborating account of the same incident, cited in §2 —
+    https://snyk.io/blog/cline-supply-chain-attack-prompt-injection-github-actions/
+26. `mcp-scan` / `snyk-agent-scan`, PyPI package pages — primary-source
+    basis for the exclusion decision in §3 —
+    https://pypi.org/project/mcp-scan/ and
+    https://pypi.org/project/snyk-agent-scan/
