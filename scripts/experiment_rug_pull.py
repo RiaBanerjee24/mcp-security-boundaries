@@ -1,39 +1,19 @@
 """
-scripts/experiment_rug_pull.py
-
-The core experiment: does a wire-level tool-definition hash (what every
-existing MCP rug-pull defense we found — ETDI, MCP-Scan, hardened-mcp-server
-— actually pins) detect a same-signature/different-behavior mutation? Does
-Tooldex's file-hash pinning?
-
-Method
-------
-1. Snapshot echo_server.py (v1): a tool named `echo` that returns its input
-   unchanged.
-2. Connect to it as a real MCP client would, call tools/list, and compute
-   the "wire hash" = sha256 of the canonicalized {name, description,
-   inputSchema} — this is the strongest policy tested by hardened-mcp-server
-   ("pin the raw wire object", their best performer at 7/8 attacks caught).
-   Also compute the file hash (sha256 of the script's bytes, what Tooldex's
-   trust_store.py does) and actually call the tool to record real behavior.
-3. Overwrite echo_server.py with v2: same tool name, same docstring
-   (=description), same signature (=input schema) — the declared interface
-   is byte-for-byte identical — but the return statement now leaks an
-   environment variable into the response. A silent behavior change with a
-   preserved interface: the exact "same-signature rug pull" class.
-4. Repeat step 2 against v2. Compare all three signals before vs after.
-5. Restore v1 so the repo is left clean and this script is rerunnable.
+scripts/experiment_rug_pull.py — the echo-server demo, now built on the
+shared harness in _rug_pull_harness.py. See that file for what's actually
+being measured and why. This script just supplies the server-specific
+pieces: where the file lives, how to launch it, and the v1/v2 code pair.
 """
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 import sys
 from pathlib import Path
 
-from mcp import ClientSession
-from mcp.client.stdio import StdioServerParameters, stdio_client
+from mcp.client.stdio import StdioServerParameters
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _rug_pull_harness import run_mutation_experiment  # noqa: E402
 
 SERVER_PATH = Path(__file__).resolve().parent.parent / "mock_servers" / "echo_server.py"
 
@@ -80,61 +60,20 @@ if __name__ == "__main__":
 '''
 
 
-def file_hash() -> str:
-    return hashlib.sha256(SERVER_PATH.read_bytes()).hexdigest()
+def make_params() -> StdioServerParameters:
+    return StdioServerParameters(command="uv", args=["run", "--script", str(SERVER_PATH)])
 
 
-def wire_hash(tool) -> str:
-    canonical = json.dumps(
-        {"name": tool.name, "description": tool.description, "inputSchema": tool.input_schema},
-        sort_keys=True, separators=(",", ":"),
+async def main() -> int:
+    ok = await run_mutation_experiment(
+        hashed_file=SERVER_PATH,
+        v1_code=V1_CODE,
+        v2_code=V2_CODE,
+        make_params=make_params,
+        tool_name="echo",
+        call_args={"text": "hello"},
     )
-    return hashlib.sha256(canonical.encode()).hexdigest()
-
-
-async def probe():
-    params = StdioServerParameters(command="uv", args=["run", "--script", str(SERVER_PATH)])
-    async with stdio_client(params) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            tools = (await session.list_tools()).tools
-            echo_tool = next(t for t in tools if t.name == "echo")
-            call = await session.call_tool("echo", {"text": "hello"})
-            output = call.content[0].text if call.content else None
-            return wire_hash(echo_tool), file_hash(), output
-
-
-async def main():
-    SERVER_PATH.write_text(V1_CODE)
-    print("=== v1 (original): tool that echoes input unchanged ===")
-    wire1, file1, out1 = await probe()
-    print(f"  wire hash: {wire1}")
-    print(f"  file hash: {file1}")
-    print(f"  echo('hello') -> {out1!r}")
-
-    SERVER_PATH.write_text(V2_CODE)
-    print("\n=== v2 (mutated): same name/description/schema, leaks $USER into output ===")
-    wire2, file2, out2 = await probe()
-    print(f"  wire hash: {wire2}")
-    print(f"  file hash: {file2}")
-    print(f"  echo('hello') -> {out2!r}")
-
-    SERVER_PATH.write_text(V1_CODE)  # restore, keep the repo clean
-
-    print("\n=== Result ===")
-    print(f"  Wire-level hash (what ETDI/MCP-Scan/hardened-mcp-server pin): "
-          f"{'UNCHANGED — mutation NOT detected' if wire1 == wire2 else 'changed — detected'}")
-    print(f"  File hash (what Tooldex pins):                                "
-          f"{'unchanged' if file1 == file2 else 'CHANGED — mutation DETECTED'}")
-    print(f"  Actual tool output:                                           "
-          f"{'unchanged' if out1 == out2 else 'CHANGED — real behavior differs'}")
-
-    if wire1 == wire2 and file1 != file2 and out1 != out2:
-        print("\n  CONFIRMED: same-signature behavior change, invisible to wire-level")
-        print("  pinning, caught by file-level pinning.")
-        return 0
-    print("\n  UNEXPECTED — re-check the experiment.", file=sys.stderr)
-    return 1
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":

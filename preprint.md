@@ -2,6 +2,9 @@
 
 **Author:** Ria Banerjee
 **Status:** Draft — sections marked `TODO` need your input/results before submission.
+**Competing interests:** The author is the sole developer of Tooldex, one
+of the eight systems evaluated in this paper (§3, §5). No other competing
+interests are declared.
 
 ---
 
