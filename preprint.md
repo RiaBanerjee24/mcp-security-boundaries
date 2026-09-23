@@ -10,96 +10,170 @@ interests are declared.
 
 ## Abstract
 
-Every current MCP "rug-pull" defense hashes or signs some subset of a
-tool's *declared interface* — name, description, input schema — never its
-implementation. This paper first audits exactly where eight real,
-currently-deployed or currently-proposed defenses each stop, reading
-primary source rather than secondary summaries, then demonstrates three
-nested boundaries on a real, popular reference server (Anthropic's
-official `filesystem` MCP server), not a hand-built example. Experiment 1
-shows wire-level interface hashing misses a schema-preserving behavior
-change that a full file hash catches. Experiment 2 corrects an assumption
-this project started with — Tooldex's real, published `trust_store.py`
-already hashes a server's entire local file tree, not just its entry
-point — and shows that even this more-complete hash stops exactly at
-package-manager-installed dependencies by design: mutating a real npm
-dependency the target server actually uses is invisible to Tooldex's own
-code, called directly, and to a local-closure hash alike, but caught by a
-minimal lockfile-depth extension demonstrated here for the first time.
-Experiment 3 shows a further, structural limit: a dormant,
-threshold-gated trigger written once at deployment and never touched
-again is invisible to any static hash, however complete, because nothing
-on disk ever changes — only comparing a tool's own repeated output
-against a canary baseline catches it. A fourth experiment runs all three
-mutations together against one unified static-plus-canary architecture,
-showing the combination catches every case that neither layer catches
-alone. All four experiments are reproducible end to end via Docker or a
-plain Python/Node toolchain. The result is a precise map of where
-today's best deployed integrity checks stop, and a minimal, working
-extension that moves that boundary one layer further — with a remaining,
-named boundary of its own.
+Current MCP "rug-pull" defenses hash or sign a tool's *declared
+interface* — name, description, input schema — not its implementation.
+This paper audits where eight currently-deployed or currently-proposed
+defenses stop, checked against each project's own source and
+documentation, and then examines three further boundaries using a real
+MCP reference server (Anthropic's official `filesystem` server) rather
+than a constructed example. Experiment 1 shows that wire-level interface
+hashing does not detect a schema-preserving behavior change, while a
+full file hash does. Experiment 2 revisits an assumption made earlier in
+this project: Tooldex's published `trust_store.py` already hashes a
+server's entire local file tree, not only its entry point. Even so, that
+hash stops at package-manager-installed dependencies by design —
+mutating a real npm dependency the target server uses is not detected by
+Tooldex's own code, called directly, or by a local-closure hash, but is
+detected by a lockfile-depth extension that had previously been
+specified but not run. Experiment 3 shows a further limit: a dormant,
+threshold-gated trigger written once at deployment and never modified
+afterward is not visible to any static hash, since nothing on disk
+changes; comparing a tool's repeated output against a canary baseline
+does detect it. A fourth experiment combines all three mutations against
+one static-plus-canary architecture, which detects all three cases where
+neither layer alone does. All four experiments are reproducible via
+Docker or a plain Python/Node toolchain. The result is a specific account
+of where these integrity checks stop, along with a minimal extension
+that closes part of that gap and a remaining boundary the extension does
+not close.
 
 ---
 
 ## 1. Introduction
 
-The Model Context Protocol (MCP) lets an AI agent call external tools
-through a declared interface: a name, a natural-language description, and
-a JSON input schema. A client approves a tool once, based on that
-interface, and then trusts it indefinitely. A **"rug pull"** is when the
-tool's actual behavior changes after that approval without the interface
-changing — the client has no signal that anything is different, because it
-never re-inspects anything beyond what it originally approved.
+Large language models (LLMs) are increasingly deployed as agentic systems
+that must act beyond the boundaries of their training data. Benchmark
+studies demonstrate this directly: LLMs invoke external tools mid-task
+and execute code to do so, with measurable gains in task performance
+from each additional turn of tool use
+([Wang et al., "MINT: Evaluating LLMs in Multi-turn Interaction with
+Tools and Language Feedback"](https://arxiv.org/abs/2309.10691), arXiv
+2309.10691), and tool-augmented systems more broadly extend this pattern
+to structured databases and web search
+([Qu et al., "Tool Learning with Large Language Models: A
+Survey"](https://arxiv.org/abs/2405.17935), arXiv 2405.17935). Beyond
+such general-purpose tools, agents are also
+increasingly connected to an organization's own proprietary data: the
+Model Context Protocol (MCP) has become a common substrate for this,
+standardizing how an AI application connects to external tools and data
+sources and providing "secure, two-way connections between [an
+organization's] data sources and AI-powered tools" — including "the
+systems where data lives, including content repositories, business
+tools, and development environments"
+([Anthropic, 2024](https://www.anthropic.com/news/model-context-protocol)).
+MCP follows a host–client–server architecture in which an AI application
+(the *host*) opens a dedicated *client* connection to each *server* it
+uses; a server can run locally as a subprocess on the same machine — the
+common case for a filesystem or local-database tool, reached over
+`stdio` — or remotely as a hosted service reached over HTTP, so a given
+server may be operated by a large cloud provider or by a single
+individual or small team running their own script
+([Model Context Protocol, 2026](https://modelcontextprotocol.io/docs/concepts/architecture)).
+Regardless of who operates it or how it is reached, a server exposes each
+of its capabilities to the client as a *tool*, described only by a name,
+a natural-language description, and a JSON input schema; the client
+never receives the tool's underlying implementation, only this declared
+interface ([Model Context Protocol, 2026](https://modelcontextprotocol.io/docs/concepts/architecture)).
+A client approves a tool once, based on that interface, and then trusts
+it indefinitely: "Standard MCP Clients, once a tool is 'approved' ...,
+typically do not re-fetch and re-verify the tool's complete definition
+(including its schema or a cryptographic hash) on every subsequent
+invocation" (ETDI, §III-B, arXiv 2506.01333).
 
-This is not a hypothetical concern. It is named explicitly in:
+This combination — rich natural-language metadata sitting directly in an
+agent's decision loop, and a trust decision made once and never
+revisited — has made MCP the subject of active, rapidly growing security
+research, including a systematization-of-knowledge effort aiming "to
+provide a comprehensive taxonomy of risks in the MCP ecosystem"
+([arXiv 2512.08290](https://arxiv.org/abs/2512.08290)). Named attack
+classes include: *tool poisoning*, where an adversary embeds malicious
+instructions directly in a tool's description or metadata so that they
+enter the agent's context at registration time, before any tool actually
+executes — first demonstrated by [Invariant
+Labs](https://invariantlabs.ai/blog/mcp-security-notification-tool-poisoning-attacks)
+(April 2025) and since studied at benchmark scale
+([MCPTox](https://arxiv.org/abs/2508.14925), arXiv 2508.14925);
+*indirect prompt injection*, where adversarial instructions are embedded
+in external content a tool later retrieves — a document, a web page, a
+database record — rather than in the tool definition itself, a general
+LLM-application vulnerability introduced by [Greshake et
+al.](https://arxiv.org/abs/2302.12173) (arXiv 2302.12173) that later work
+demonstrates applies directly to MCP servers
+([arXiv 2609.10854](https://arxiv.org/abs/2609.10854)); *tool shadowing*,
+where a malicious server's tool description injects instructions that
+alter how the agent behaves toward a different, already-trusted tool —
+not by mimicking that tool's name, but by adding behavior-overriding text
+the model reads alongside it — likewise first demonstrated by [Invariant
+Labs](https://invariantlabs.ai/blog/mcp-security-notification-tool-poisoning-attacks)
+in the same disclosure and since analyzed more generally as
+descriptor-level manipulation
+([arXiv 2512.06556](https://arxiv.org/abs/2512.06556)); *OAuth and token
+theft*, where an agent reads and exposes credentials accessible to its
+tools — locally cached API keys and secrets
+([Radosevich and Halloran, "MCP Safety
+Audit"](https://arxiv.org/abs/2504.03767), arXiv 2504.03767), or, in
+OAuth-based deployments, an access token obtained after a malicious
+server completes what looks like a normal authorization flow — a risk
+the protocol's own specification names as "Token Theft" and the
+"Confused Deputy Problem"
+([Model Context Protocol, "Authorization Security
+Considerations"](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/security-considerations))
+and which Alibaba Cloud's security team demonstrated against several
+major MCP clients
+([GitHub issue #544](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/544),
+May 2025); and *over-permission*, where a tool or agent is granted, or
+induced into using, broader access than its task requires
+([OWASP MCP02:2025 – Privilege Escalation via Scope
+Creep](https://owasp.org/www-project-mcp-top-10/2025/MCP02-2025%E2%80%93Privilege-Escalation-via-Scope-Creep);
+[arXiv 2507.06250](https://arxiv.org/abs/2507.06250)). This paper is
+concerned with a sixth class, distinct from all five above in *when* the
+compromise happens: the **rug pull**, in which a tool behaves as declared
+at the moment a client approves it, and only later — after that approval,
+with no further action from the client — starts behaving differently,
+while its declared interface stays exactly as it was. The term itself
+was first used for MCP by [Invariant
+Labs](https://invariantlabs.ai/blog/mcp-security-notification-tool-poisoning-attacks)
+in the same April 2025 disclosure that named tool poisoning and tool
+shadowing — "the package or server-based architecture of MCP allows for
+*rug pulls* - where a malicious server can change the tool description
+after the client has already approved it" — two months before ETDI, the
+first paper to propose a formal defense against it, adopted the same
+name (arXiv 2506.01333). Rug pull is named explicitly in OWASP's MCP Top
+10
+([MCP04:2025 – Software Supply Chain Attacks & Dependency
+Tampering](https://owasp.org/www-project-mcp-top-10/2025/MCP04-2025%E2%80%93Software-Supply-Chain-Attacks&Dependency-Tampering)),
+in Microsoft's Zero Trust attack-technique catalog
+(["Rug-Pull Attack (Agent / MCP
+Server)"](https://learn.microsoft.com/en-us/security/zero-trust/catalog-ai-attack-techniques/rug-pull-attack),
+dated July 2026), and in ETDI (arXiv 2506.01333), and is the
+acknowledged, self-reported limitation of
+at least three independent, actively-maintained defense projects (§3).
 
-- OWASP's MCP Top 10, [MCP04:2025 – Software Supply Chain Attacks &
-  Dependency Tampering](https://owasp.org/www-project-mcp-top-10/2025/MCP04-2025%E2%80%93Software-Supply-Chain-Attacks&Dependency-Tampering)
-- Microsoft's Zero Trust attack-technique catalog, ["Rug-Pull Attack (Agent
-  / MCP Server)"](https://learn.microsoft.com/en-us/security/zero-trust/catalog-ai-attack-techniques/rug-pull-attack)
-  (dated July 2026)
-- The paper that coined the term for MCP, ETDI (arXiv 2506.01333)
+Despite this attention, existing MCP security research is mostly
+attack-centric: it shows how an attack works, not where a defense
+stops. A defense-*placement* taxonomy makes this point directly, finding
+that current defenses "concentrate on tool-adjacent protections, while
+important threats involving host orchestration, transport assumptions,
+and registry/supply-chain mechanisms remain comparatively underdefended"
+([MCP-DPT](https://arxiv.org/pdf/2604.07551), arXiv 2604.07551). That
+taxonomy maps *where* a defense sits, not *what* it checks. This paper
+does the latter, narrowly, for rug pull. Every experiment below runs
+against a real, actively-maintained MCP reference server — Anthropic's
+own official `filesystem` server — not a constructed example.
 
-and it is the acknowledged, self-reported limitation of at least three
-independent, actively-maintained defense projects (§3). It is also
-implicit in a defense-*placement* taxonomy published independently of any
-of the individual tools audited here: [MCP-DPT](https://arxiv.org/pdf/2604.07551)
-(arXiv 2604.07551) finds that "current defenses are uneven and frequently
-concentrate on tool-adjacent protections, while important threats
-involving host orchestration, transport assumptions, and
-registry/supply-chain mechanisms remain comparatively underdefended."
-That taxonomy classifies *where in the architecture* a defense sits; it
-does not itself audit what any single defense actually checks once it's
-there, which is precisely what §3 does.
-
-**What's missing is precision, not awareness.** Every source above states
-that "interface-preserving behavior changes are a problem" in general
-terms. None of them states *exactly* where each real defense's coverage
-actually stops. This paper does both, and corrects an assumption it
-started with along the way:
-
-1. A field-by-field audit of real, currently-deployed or
-   currently-proposed MCP integrity mechanisms, showing precisely which
-   fields each one covers and where each one stops (§3) — including
-   reading Tooldex's own real, published source directly rather than
-   assuming its scope, which overturned this project's own earlier
-   characterization of it as entry-point-only.
-2. A reproducible demonstration, on a real reference server rather than
-   a hand-built example, that wire-level interface hashing misses a
-   schema-preserving behavior change (§4, Gap 1).
-3. A second reproducible demonstration, against a real npm dependency
-   and Tooldex's real code (not a reimplementation), that even Tooldex's
-   actual local-closure hash — already more complete than this project
-   first assumed — stops precisely at package-manager-installed
-   dependencies, and that a minimal lockfile-depth extension, run here
-   for the first time rather than only specified, closes that boundary
-   (§5, Gap 2).
-4. A third reproducible demonstration that no static hash — however
-   complete, including the lockfile-depth extension from Gap 2 — can
-   ever detect a malicious trigger present from first deployment that
-   never touches disk again, and that only comparing a tool's own real
-   output across repeated calls against a canary baseline catches it
-   (§6, Gap 3).
+First, we audit eight real defenses field by field, to see exactly what
+each one covers (§3). Second, we compare wire hash against file hash:
+wire hash misses a schema-preserving behavior change; file hash catches
+it (§4, Gap 1). Third, we compare a local-closure hash against a
+lockfile-depth hash: the local-closure hash misses a real dependency
+compromise; the lockfile-depth extension catches it (§5, Gap 2). Fourth,
+we compare a static hash against a canary check — repeating the same
+tool call and comparing each response to an established baseline: no
+static hash, however complete, catches a dormant trigger that never
+touches disk; the canary check does (§6, Gap 3). A combined experiment
+then reruns all three
+mutations together against one static-and-canary check, and catches
+every case (§6).
 
 ### 1.1 Terminology scope (read this before citing "rug pull" elsewhere)
 
@@ -700,3 +774,52 @@ taken from secondary summaries.
     basis for the exclusion decision in §3 —
     https://pypi.org/project/mcp-scan/ and
     https://pypi.org/project/snyk-agent-scan/
+27. Qu et al., "Tool Learning with Large Language Models: A Survey",
+    cited in §1 — https://arxiv.org/abs/2405.17935
+28. Wang et al., "MINT: Evaluating LLMs in Multi-turn Interaction with
+    Tools and Language Feedback" (ICLR 2024), cited in §1 —
+    https://arxiv.org/abs/2309.10691
+29. Anthropic, "Introducing the Model Context Protocol" (announcement),
+    cited in §1 — https://www.anthropic.com/news/model-context-protocol
+30. Model Context Protocol, "Architecture overview" (specification docs,
+    protocol revision 2026-07-28), cited in §1 —
+    https://modelcontextprotocol.io/docs/concepts/architecture
+31. "Systematization of Knowledge: Security and Safety in the Model
+    Context Protocol Ecosystem", cited in §1 —
+    https://arxiv.org/abs/2512.08290
+32. Invariant Labs, "MCP Security Notification: Tool Poisoning Attacks"
+    (1 April 2025) — origin of both "tool poisoning" and "tool
+    shadowing" as named MCP attacks, cited in §1 —
+    https://invariantlabs.ai/blog/mcp-security-notification-tool-poisoning-attacks
+33. "MCPTox: A Benchmark for Tool Poisoning Attack on Real-World MCP
+    Servers", cited in §1 — https://arxiv.org/abs/2508.14925
+34. Greshake et al., "Not what you've signed up for: Compromising
+    Real-World LLM-Integrated Applications with Indirect Prompt
+    Injection" — origin of "indirect prompt injection" (general LLM
+    context, predates MCP), cited in §1 —
+    https://arxiv.org/abs/2302.12173
+35. "No-Box Vulnerability Analysis: Description-only Detection of
+    Indirect Prompt Injection Vulnerabilities in MCP Servers", cited in
+    §1 — https://arxiv.org/abs/2609.10854
+36. "Semantic Attacks on Tool-Augmented LLMs: Securing the Model Context
+    Protocol Against Descriptor-Level Manipulation", cited in §1 —
+    https://arxiv.org/abs/2512.06556
+37. Radosevich and Halloran, "MCP Safety Audit: LLMs with the Model
+    Context Protocol Allow Major Security Exploits", cited in §1 —
+    https://arxiv.org/abs/2504.03767
+38. Model Context Protocol, "Authorization Security Considerations"
+    (specification docs, protocol revision 2026-07-28) — defines "Token
+    Theft" and the "Confused Deputy Problem", cited in §1 —
+    https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/security-considerations
+39. AlibabaCloudSecurity, GitHub issue #544 on
+    `modelcontextprotocol/modelcontextprotocol`, "The MCP protocol
+    exhibits insufficient security design, which increases the risk of
+    widespread phishing attacks" (18 May 2025) — first disclosed OAuth
+    access-token theft exploit against major MCP clients, cited in §1 —
+    https://github.com/modelcontextprotocol/modelcontextprotocol/issues/544
+40. OWASP MCP Top 10, MCP02:2025 – Privilege Escalation via Scope Creep,
+    cited in §1 —
+    https://owasp.org/www-project-mcp-top-10/2025/MCP02-2025%E2%80%93Privilege-Escalation-via-Scope-Creep
+41. "We Urgently Need Privilege Management in MCP: A Measurement of API
+    Usage in MCP Ecosystems", cited in §1 —
+    https://arxiv.org/abs/2507.06250
