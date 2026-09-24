@@ -1,20 +1,21 @@
-# Where MCP Tool Integrity Checks Stop: A Field-Level Comparison and a Minimal Lockfile-Depth Fix
+# Where MCP Tool Integrity Checks Stop: A Source-Verified Audit of Rug-Pull Defenses
 
 **Author:** Ria Banerjee
 **Status:** Complete draft — all four experiments run and reproducible, abstract and conclusion written, all citations resolved. Ready for a proofreading pass before submission.
 **Competing interests:** The author is the sole developer of Tooldex, one
-of the eight systems evaluated in this paper (§3, §5). No other competing
+of the twelve systems evaluated in this paper (§3, §5). No other competing
 interests are declared.
 
 ---
 
 ## Abstract
 
-Current MCP "rug-pull" defenses hash or sign a tool's *declared
-interface* — name, description, input schema — not its implementation.
-This paper audits where eight currently-deployed or currently-proposed
-defenses stop, checked against each project's own source and
-documentation, and then examines three further boundaries using a real
+Most current MCP "rug-pull" defenses hash or sign a tool's *declared
+interface* (name, description, input schema) or classify individual
+requests, rather than verifying its implementation. This paper audits
+where twelve defenses stop, seven from the research literature and five
+deployed, checked against each paper's full text or each project's
+source code, and then examines three further boundaries using a real
 MCP reference server (Anthropic's official `filesystem` server) rather
 than a constructed example. Experiment 1 shows that wire-level interface
 hashing does not detect a schema-preserving behavior change, while a
@@ -32,10 +33,9 @@ changes; comparing a tool's repeated output against a canary baseline
 does detect it. A fourth experiment combines all three mutations against
 one static-plus-canary architecture, which detects all three cases where
 neither layer alone does. All four experiments are reproducible via
-Docker or a plain Python/Node toolchain. The result is a specific account
-of where these integrity checks stop, along with a minimal extension
-that closes part of that gap and a remaining boundary the extension does
-not close.
+Docker or a plain Python/Node toolchain. The result is a source-verified account
+of where current integrity checks stop, and of which of those boundaries
+static hashing can and cannot cross.
 
 ---
 
@@ -145,9 +145,11 @@ Tampering](https://owasp.org/www-project-mcp-top-10/2025/MCP04-2025%E2%80%93Soft
 in Microsoft's Zero Trust attack-technique catalog
 (["Rug-Pull Attack (Agent / MCP
 Server)"](https://learn.microsoft.com/en-us/security/zero-trust/catalog-ai-attack-techniques/rug-pull-attack),
-dated July 2026), and in ETDI (arXiv 2506.01333), and is the
-acknowledged, self-reported limitation of
-at least three independent, actively-maintained defense projects (§3).
+dated July 2026), and in ETDI (arXiv 2506.01333), and is
+acknowledged as an open problem in defense work itself: "a tool could
+maintain an identical description while modifying its server-side
+implementation" ([Acharya and Gupta](https://arxiv.org/abs/2604.05969),
+arXiv 2604.05969; §3).
 
 Despite this attention, existing MCP security research is mostly
 attack-centric: it shows how an attack works, not where a defense
@@ -161,7 +163,7 @@ does the latter, narrowly, for rug pull. Every experiment below runs
 against a real, actively-maintained MCP reference server — Anthropic's
 own official `filesystem` server — not a constructed example.
 
-First, we audit eight real defenses field by field, to see exactly what
+First, we audit twelve defenses, seven academic and five deployed, field by field, to see exactly what
 each one covers (§3). Second, we compare wire hash against file hash:
 wire hash misses a schema-preserving behavior change; file hash catches
 it (§4, Gap 1). Third, we compare a local-closure hash against a
@@ -198,109 +200,106 @@ available as a misreading by the time a reviewer reaches it.
 
 ## 2. Threat model
 
-A tool's implementation can change without its interface changing through
-several ordinary, already-observed channels — not only "an attacker
-breaks into your laptop":
+A user typically approves an MCP tool once, after which the client
+invokes it without further review. Security therefore rests on the
+assumption that an approved tool continues to behave as it did at
+approval.
 
-- **Compromised transitive dependency.** The entry-point file is
-  untouched; a package it imports gets a malicious version pushed to
-  PyPI/npm. Real precedent: **Clinejection** (17 February 2026) — a
-  compromised npm publish token was used to push a malicious `cline@2.3.0`
-  to the npm registry, adding a `postinstall` script that silently
-  installed an unauthorized second AI agent on an estimated ~4,000
-  developer machines before the package was deprecated roughly eight
-  hours later ([Cloud Security Alliance research
-  note](https://labs.cloudsecurityalliance.org/research/csa-research-note-clinejection-prompt-injection-cicd-cache-p/);
-  [Snyk](https://snyk.io/blog/cline-supply-chain-attack-prompt-injection-github-actions/)).
-  §5 demonstrates the exact mechanism this describes, not just its
-  plausibility: a real npm dependency (`minimatch`) of a real reference
-  server, mutated in place, invisible to wire hashing and to Tooldex's
-  real, current `trust_store.py` alike.
-- **Compromised upstream repository.** A locally-run server is a cloned
-  git repo (`git clone ... && python server.py`); a compromised maintainer
-  account or a merged malicious PR lands in the next `git pull`, and the
-  new (also legitimately re-signed, if the repo does that) content becomes
-  the new baseline without triggering scrutiny.
-- **General local compromise.** Any other process with filesystem write
-  access (malware, a compromised IDE extension) can edit the server file
-  directly; the MCP server is simply one of many things such a foothold
-  could tamper with, and an attractive one because it inherits whatever
-  permissions the tool already has.
-- **Malicious or compromised insider**, where the "server" is an
-  internally shared script multiple engineers pull from.
+That assumption fails whenever a tool's implementation changes while
+its interface does not, which occurs through well-documented channels. A
+dependency may be republished with malicious content while the server's
+own code is untouched, as when `flatmap-stream`, added as a dependency
+of `event-stream` 3.3.6, stole wallet credentials from Copay users
+([npm](https://blog.npmjs.org/post/180565383195/details-about-the-event-stream-incident);
+see also [Ohm et al.](https://arxiv.org/abs/2005.09535)). The same
+channel has reached AI agent tooling: in the Clinejection incident of 17
+February 2026, a stolen npm publish token was used to release a
+malicious `cline@2.3.0` to an estimated 4,000 developer machines ([Cloud
+Security Alliance](https://labs.cloudsecurityalliance.org/research/csa-research-note-clinejection-prompt-injection-cicd-cache-p/);
+[Snyk](https://snyk.io/blog/cline-supply-chain-attack-prompt-injection-github-actions/)).
+Malicious code may also enter upstream, as in the xz backdoor
+(CVE-2024-3094; [Freund](https://www.openwall.com/lists/oss-security/2024/03/29/4)),
+or be written directly by local malware or an insider. Such changes are
+also common in benign form: across 59,821 release transitions of MCP
+servers in the public registry, 74.6% left the tool interface unchanged
+while the resolved package version changed ([`snyk/agent-scan`
+#482](https://github.com/snyk/agent-scan/issues/482)).
 
-None of these require defeating anything at the protocol layer — they all
-land as an ordinary file-content change, which is exactly the layer none
-of the defenses in §3 inspect.
-
-**This is not a rare pattern at real ecosystem scale.** A Snyk-owned
-project (`snyk/agent-scan`, issue #482) measured, across 7,949
-multi-version MCP servers and 59,821 real release transitions in the
-public registry, that **74.6%** of releases kept the tool's presented
-interface identical while the resolved package version changed
-underneath. That figure isn't a measurement of malicious activity — most
-of those releases are ordinary, benign updates — but it confirms that
-"interface stays constant while the implementation changes" is the
-*overwhelmingly common* shape of a real MCP release, not a contrived
-edge case invented for this paper. Any defense that stops at the
-interface is structurally blind to the large majority of real update
-activity, benign or malicious, by this measurement.
-
-That same issue proposes a different dynamic signal than this paper
-builds: watching for *capability expansion* at runtime (newly-accessed
-network hosts, secrets, or filesystem writes) rather than comparing a
-tool's own output against a canary baseline. A real, credible,
-differently-shaped answer to the same motivating problem — closer to
-the OS/process-level runtime monitoring family (§3) than to this
-paper's deterministic canary check — not evaluated here, but worth
-knowing it exists as an alternative, not a competing claim on the same
-mechanism.
+We therefore assume an adversary with write access to the server's
+source tree and installed dependencies, exercised either after approval
+(Gaps 1 and 2) or once before approval as logic that stays dormant until
+a runtime condition is met (Gap 3). The adversary cannot modify the MCP
+client, the stored integrity baseline, or protocol traffic, and seeks to
+alter an approved tool's behavior without failing any integrity check.
+The defender records a baseline at approval and verifies against it at
+startup or per invocation. We evaluate wire-level and local-closure
+baselines (§3), a lockfile-depth extension (§5), and a runtime canary
+check (§6). We do not consider servers overtly malicious at
+installation, prompt injection or tool poisoning via descriptions,
+compromised hosts or clients, transport attacks, or runtime
+capability-expansion monitoring.
 
 ---
 
 ## 3. Field-level audit of current MCP integrity mechanisms
 
-Every source below was read directly (not paraphrased from a secondary
-summary) to confirm the exact scope of what it checks.
+We audit twelve defenses: seven from the research literature and five
+deployed systems. Each academic entry was checked against the paper's
+full text, and each deployed entry against its current source code
+(commits listed in the references), rather than against secondary
+descriptions. The defenses fall into two families. *Integrity and
+provenance checks* (Table 1) record a baseline or verify a signature
+and flag any deviation from it. *Runtime detectors and containment*
+(Table 2) inspect or restrict individual interactions as they occur.
 
-| Defense | Exact fields covered | Re-verification timing | Reaches dependency closure? |
+**Table 1. Integrity and provenance checks.**
+
+| Defense | What is hashed or signed | When checked | Covers implementation and dependencies? |
 |---|---|---|---|
-| **ETDI** (arXiv 2506.01333) | name, description, input schema, permissions; optionally a hash of the tool's backend *API contract* (e.g. an OpenAPI/Swagger spec) | On reconnect; signature re-verified against stored public key | **No** — an OpenAPI contract describes the interface a backend promises, not what its code does; also conditional on the tool having a documented REST contract at all |
-| **mcpseal** | name, description, input schema | On connect | No — states this as its own limitation |
-| **hardened-mcp-server** | raw wire object {name, description, schema}, best-performing of 20 policies tested | On connect | No — states launch-command binding is "weaker than hashing executable contents" |
-| **mcp-pin / Plumbline** | name, description, input schema, annotations, RFC 8785-canonicalized | Periodic crawl; append-only transparency log | No — confirmed via its own 2026-09-03 finding doc |
-| **Vercel AI SDK** (`fingerprintTools`/`detectToolDrift`, `ai@7.0.19`, July 2026) | description, resolved input schema, title | On demand, baseline storage is the app's responsibility | No |
-| **MCP Manager** (Feature Governance) | name, title, description (developer-selectable granularity) | Per allowlist check | No — explicitly no schema or implementation matching |
-| **Microsoft APM** | full content hash of declared agent-context packages (skills, prompts, MCP servers), via lockfile | **Install-time only**; `apm audit` is manual/opt-in and diffs local hand-edits, not upstream changes | Partial — hashes real content, but for a different artifact class (agent-context packages, not a live MCP server at the moment of tool invocation) and without automatic per-call re-verification |
-| **Tooldex `trust_store.py`** | full content of every recognized local source file reachable by walking *down* from the entry point's own directory — confirmed by reading the real, published v1.0.2 source directly (`inspect.getsource`), not assumed | On connect | **Partial** — correctly covers the local closure (this is *not* entry-point-only, correcting an earlier, incorrect characterization in this project); explicitly excludes package-manager dependency directories (`node_modules`, `venv`, `.venv`, `env`) by design — "pinning an entire node_modules tree is a different, impractical problem," per its own docstring |
-| **This work (demonstrated, §5)** | Tooldex's real local-closure hash **+** a hash-of-hashes over the resolved `node_modules` (or equivalent) dependency directory | On connect | **Yes**, for local files and installed package-manager dependencies both |
+| **ETDI** (Bhatt et al., arXiv 2506.01333) | Name, description, input schema, permissions; optionally a hash of the backend's API contract (e.g., an OpenAPI specification) | On reconnect, against the provider's public key | **No.** An API contract describes the interface a backend promises, not what its code does. |
+| **Cryptographic Tool Attestation** (Acharya and Gupta, arXiv 2604.05969) | Publisher-signed record over the hash of the tool definition, version, timestamp, and a hash of the tool's dependency tree | Before each invocation | **Dependencies, in design.** The paper reports no implementation. It names an identical description with a modified server-side implementation as an open challenge, and a publisher-signed dependency hash does not detect a malicious release that is legitimately signed. |
+| **mcp-context-protector** (Trail of Bits) | SHA-256 over canonicalized name, description, parameters, and output schema of each tool, plus server instructions (trust on first use) | On connect and on `notifications/tools/list_changed` | **No.** A changed launch command is treated as a new server; code is not hashed. |
+| **Docker MCP Gateway** (Docker) | Cosign signature over the container image digest; mutable tags rejected | Before image pull | **Yes, for the whole image**, but only for images in Docker's `mcp/` namespace; other images are pulled unverified. It verifies the publisher, not behavior, and does not re-verify after pull. |
+| **ToolHive** (Stacklok) | Sigstore or GitHub Attestation build provenance of the container image | At each server launch | **Yes, for the whole image**, but only for registry servers that declare provenance. The default mode (`warn`) logs a failed verification and continues. |
+| **Vercel AI SDK** (`fingerprintTools`/`detectToolDrift`, `ai@7.0.19`) | Description, resolved input schema, title | On demand; baseline storage left to the application | **No.** |
+| **Tooldex** (`trust_store.py`, v1.0.2) | Full content of every recognized source file below the entry point's directory | On connect | **Local files only.** Package-manager directories (`node_modules`, `venv`, `.venv`, `env`) are excluded by design. |
 
-**Reading the table:** every row stops at a different boundary. Tooldex's
-own hash — the strongest of the existing, deployed options, and already
-closer to a full local-closure hash than this project originally gave it
-credit for — is necessary but not sufficient: it stops precisely at the
-boundary of package-manager-installed dependencies, deliberately, by its
-own design. That specific, previously unquantified boundary — not "does
-Tooldex hash more than one file" (it already does) but "does anything
-reach inside an installed dependency" (nothing does) — is the gap this
-paper closes.
+**Table 2. Runtime detectors and containment.**
 
-**A tool deliberately left out, and why.** Invariant Labs' MCP-Scan is
-widely described secondhand (its own docs included) as offering "Tool
-Pinning... via tool hashing" for rug-pull detection, which would put it
-in this table. Checking that claim directly, the way every row above was
-checked, does not confirm it: `mcp-scan`'s PyPI listing states the
-package "has been renamed to snyk-agent-scan" and now forwards to it —
-the same `snyk/agent-scan` repository already cited in §2 for its
-capability-expansion proposal and release-transition measurement, not a
-different project. Installing the current successor package
-(`snyk-agent-scan` 0.6.4) and searching its actual source for any
-rug-pull- or tool-pinning-specific hashing code path turns up nothing
-under that name. Rather than include a row built on a secondhand claim
-this project's own standard couldn't verify against real, current source,
-it's excluded — itself a small illustration of how quickly documentation
-and implementation drift apart even for the well-established projects in
-this exact space.
+| Defense | What is inspected | Baseline over time? | Relevance to rug pull |
+|---|---|---|---|
+| **MCIP** (Jing et al., EMNLP 2025) | Interaction tracking logs, classified by a trained guard model | No | Against MCPSecBench's rug-pull scenario, mitigated 4.4% of attempts (Firewalled Agentic Networks, a general agent firewall evaluated alongside it, mitigated 13.3%) ([MCPSecBench](https://arxiv.org/abs/2508.13220)). |
+| **MCP-Guard** (Xing et al., arXiv 2508.10991) | Tool invocations and descriptions, per request: pattern scanning, a neural detector, and LLM arbitration | No | Mentions rug pull only as addressed by other work. |
+| **MindGuard** (Wang et al., arXiv 2508.20412) | The model's attention over context at each tool-call decision (a "decision dependence graph") | No | Treats rug pull as a later modification of tool metadata; an unchanged interface offers it no signal. |
+| **SHIELD** (Rostamzadeh et al., arXiv 2608.23763) | Server responses at the transport boundary | **Yes**, learned during a clean trust window | Targets staged defection directly, which corresponds to Gap 3. It does not inspect code or dependencies. |
+| **AgentBound** (Bühler et al., FSE 2026) | None; enforces a per-server permission manifest through container mounts, network allow lists, and environment filtering | Not applicable | Does not detect a change, but bounds what a changed server can reach. |
+
+**Reading the tables.** The integrity checks in Table 1 stop at one of
+three places: the declared interface (ETDI, mcp-context-protector,
+Vercel AI SDK), the local source tree (Tooldex), or a publisher-signed
+artifact (Docker MCP Gateway, ToolHive, and Cryptographic Tool
+Attestation). None detects a change to an installed dependency of a
+locally run server after approval. Container provenance does cover
+dependencies, but only for curated containerized servers, only when the
+image is pulled or launched, and only in the sense that a
+legitimately signed release is accepted whatever it contains. That
+remaining boundary, drift inside an installed dependency after
+approval, is the one §5 demonstrates on a real dependency. The
+detectors in Table 2 mostly classify individual requests without a
+baseline and therefore cannot observe a change that leaves every
+request well-formed; MCPSecBench's measurements are consistent with
+this. SHIELD is the exception: its baseline over server responses is
+the closest published analogue to the canary check in §6, and neither
+inspects the code that produces those responses.
+
+**A tool deliberately left out.** Invariant Labs' MCP-Scan is widely
+described, including in its own documentation, as offering "Tool
+Pinning... via tool hashing" for rug-pull detection. Its PyPI listing
+now states that the package "has been renamed to snyk-agent-scan", the
+same `snyk/agent-scan` repository cited in §2. A search of the current
+successor package (`snyk-agent-scan` 0.6.4) found no rug-pull or
+tool-pinning code path under that name, so it is excluded rather than
+included on the basis of an unverified claim.
 
 ---
 
@@ -326,8 +325,8 @@ directly via `npx tsx` (no separate build step to go stale between
 mutations) — not static inspection.
 
 - **Wire hash** — sha256 of canonicalized `{name, description,
-  inputSchema}` for `read_text_file` — replicates hardened-mcp-server's
-  best-performing policy.
+  inputSchema}` for `read_text_file`, the core fields pinned by ETDI,
+  mcp-context-protector, and the Vercel AI SDK (§3).
 - **File hash** — sha256 of `index.ts`'s bytes — what a naive
   entry-point-only hash would pin.
 - **Real output** — an actual `tools/call("read_text_file", {"path": "hello.txt"})`
@@ -346,14 +345,12 @@ v1 output: 'hello world\n'
 v2 output: 'hello world\n\n[leaked-user:ria]'  <- CHANGED (real leak, not simulated)
 ```
 
-**Reading:** wire-level hashing — what most of the eight existing
-defenses catalogued in §3 rely on — does not detect the change, on
+**Reading:** wire-level hashing, on which the interface-level checks
+in §3 rely, does not detect the change, on
 Anthropic's own real, popular reference implementation, not a hand-built
 example. File hashing
 does. This confirms, mechanically rather than by assertion and on real
-production code, the limitation that mcpseal, mcp-pin, and
-hardened-mcp-server each already state about themselves in their own
-documentation.
+production code, the case Acharya and Gupta identify as an open challenge (§3).
 
 See `scripts/experiment_1/README.md` for the exact mutation and run
 instructions; see §5 for an ESM-vs-CommonJS resolution detail worth
@@ -412,8 +409,9 @@ before trusting either result, not assumed.
 - **Lockfile-depth hash** — a hash-of-hashes over the resolved
   `node_modules/minimatch/` directory, established as a baseline and
   re-checked later, the same mechanism as the closure hash applied one
-  level deeper — expected **changed**. This extension was previously left
-  specified-but-not-built; this is the first time it's actually run.
+  level deeper — expected **changed**. A publisher-signed dependency-tree
+  hash is specified, but not implemented, by Acharya and Gupta (§3); the
+  variant here is a local drift baseline recorded at approval.
 - **Real output** — expected changed.
 
 **Result** (reproducible — rerun with
@@ -552,11 +550,17 @@ regardless, and the combined rule catches every row.
 
 ### 7.1 What this does and does not claim
 
-- **Does claim:** a specific, previously-unstated structural boundary
-  exists in every current MCP integrity mechanism, at two nested levels
-  (interface vs. implementation; entry-point vs. dependency closure), and
-  that boundary is closable with a straightforward extension of the
-  already-most-rigorous deployed option (file hashing).
+- **Does claim:** every current MCP integrity mechanism stops at one of
+  three nested boundaries: interface vs. implementation, local closure
+  vs. package-manager dependency, and static content vs. dormant runtime
+  behavior. The first two are closable by static hashing of sufficient
+  depth, including the lockfile-depth extension evaluated in §5; the
+  third is not closable by any static hash.
+- **Does not claim:** a complete defense. The combined static-plus-canary
+  run (Experiment 4) demonstrates that the boundaries are complementary,
+  not that the combination is robust; in particular, a trigger
+  conditioned on inputs the canary never issues is outside what this
+  paper evaluates.
 - **Does not claim:** any measurement of how often this is exploited in
   the wild — silent, interface-preserving changes are by construction
   invisible to every current detection method, so no incidence rate is
@@ -678,8 +682,8 @@ it.
 
 ## 9. Conclusion
 
-Every current MCP rug-pull defense stops at the tool's declared
-interface; this paper locates three further, nested boundaries and
+Most current MCP rug-pull defenses stop at the tool's declared
+interface or at individual requests; this paper locates three further, nested boundaries and
 demonstrates each mechanically, on the same real reference server, rather
 than asserting them. Gap 1 shows wire-level interface hashing misses a
 schema-preserving behavior change that a full file hash catches. Locating
@@ -721,105 +725,133 @@ taken from secondary summaries.
 4. Pillar Security, "I'll Just Call You Agent-to-Agent": Privilege Boundary
    Failures in CI/CD on Google's ADK Repository —
    https://www.pillar.security/blog/ill-just-call-you-agent-to-agent-privilege-boundary-failures-in-ci-cd-on-googles-adk-repository
-5. mcp-pin, 2026-09-03 schema-drift finding —
-   https://github.com/GautamTalksDev/mcp-pin/blob/main/docs/findings/2026-09-03-schema-drift.md
-6. Plumbline — https://github.com/GautamTalksDev/Plumbline
-7. Vercel AI SDK tool-drift detection (`ai@7.0.19`) —
+5. Vercel AI SDK tool-drift detection (`ai@7.0.19`) —
    https://newreleases.io/project/github/vercel/ai/release/ai@7.0.19
-8. MCP Manager, Feature Governance —
-   https://docs.mcpmanager.ai/security/feature-governance
-9. Microsoft Agent Package Manager (APM) — https://microsoft.github.io/apm/
-   and https://github.com/microsoft/apm
-10. "Same Name, Different Server: A Security Census of Silent Drift in the
+6. "Same Name, Different Server: A Security Census of Silent Drift in the
     Model Context Protocol Ecosystem" — https://arxiv.org/html/2609.14119
-11. "A Large Scale Analysis of Semantic Versioning in NPM" —
+7. "A Large Scale Analysis of Semantic Versioning in NPM" —
     https://arxiv.org/abs/2304.00394
-12. "Which Is Better For Reducing Outdated and Vulnerable Dependencies:
+8. "Which Is Better For Reducing Outdated and Vulnerable Dependencies:
     Pinning or Floating?" — https://arxiv.org/abs/2510.08609
-13. "Pinning Is Futile: You Need More Than Local Dependency Versioning to
+9. "Pinning Is Futile: You Need More Than Local Dependency Versioning to
     Defend against Supply Chain Attacks" — https://arxiv.org/pdf/2502.06662
-14. hardened-mcp-server (jkelly-dev1) — repository, direct doc quote in §3 —
-    https://github.com/jkelly-dev1/hardened-mcp-server
-15. mcpseal (confuseddude) — repository, direct doc quote in §3 —
-    https://github.com/confuseddude/mcpseal
-16. `modelcontextprotocol/servers`, official MCP reference server
+10. `modelcontextprotocol/servers`, official MCP reference server
     implementations (target of Experiments 1–3) —
     https://github.com/modelcontextprotocol/servers
-17. `minimatch`, real npm dependency mutated in Experiment 2 —
+11. `minimatch`, real npm dependency mutated in Experiment 2 —
     https://www.npmjs.com/package/minimatch
-18. Tooldex `trust_store.py`, real code called directly in Experiment 2 —
+12. Tooldex `trust_store.py`, real code called directly in Experiment 2 —
     https://pypi.org/project/tooldex/1.0.2/
-19. "TrustShiftProbe: Characterizing, Benchmarking, and Defending Staged
-    Trust Attacks on MCP Servers" — https://arxiv.org/pdf/2608.23763
-20. `mcp-behaviour-guard`, incl. the "Deadbugz" delayed-activation
+13. "TrustShiftProbe: Characterizing, Benchmarking, and Defending Staged
+    Trust Attacks on MCP Servers" (defines SHIELD), cited in §3 and §6 —
+    https://arxiv.org/pdf/2608.23763
+14. `mcp-behaviour-guard`, incl. the "Deadbugz" delayed-activation
     finding, cited in §6 —
     https://github.com/hacker-vs-cracker/mcp-behaviour-guard
-21. `snyk/agent-scan`, issue #482 — the 74.6% release-transition
+15. `snyk/agent-scan`, issue #482 — the 74.6% release-transition
     measurement and the capability-expansion proposal, cited in §2 —
     https://github.com/snyk/agent-scan/issues/482
-22. `@modelcontextprotocol/server-filesystem`, npm package page (download
+16. `@modelcontextprotocol/server-filesystem`, npm package page (download
     / dependent-package statistics cited in §4) —
     https://www.npmjs.com/package/@modelcontextprotocol/server-filesystem
-23. "MCP-DPT: A Defense-Placement Taxonomy and Coverage Analysis for Model
+17. "MCP-DPT: A Defense-Placement Taxonomy and Coverage Analysis for Model
     Context Protocol Security", cited in §1 —
     https://arxiv.org/pdf/2604.07551
-24. Cloud Security Alliance, "Clinejection: Prompt Injection in GitHub
+18. Cloud Security Alliance, "Clinejection: Prompt Injection in GitHub
     Issue Titles Enables CI/CD Cache Poisoning and Supply Chain
     Compromise", cited in §2 —
     https://labs.cloudsecurityalliance.org/research/csa-research-note-clinejection-prompt-injection-cicd-cache-p/
-25. Snyk, "How 'Clinejection' Turned an AI Bot into a Supply Chain
+19. Snyk, "How 'Clinejection' Turned an AI Bot into a Supply Chain
     Attack", corroborating account of the same incident, cited in §2 —
     https://snyk.io/blog/cline-supply-chain-attack-prompt-injection-github-actions/
-26. `mcp-scan` / `snyk-agent-scan`, PyPI package pages — primary-source
+20. `mcp-scan` / `snyk-agent-scan`, PyPI package pages — primary-source
     basis for the exclusion decision in §3 —
     https://pypi.org/project/mcp-scan/ and
     https://pypi.org/project/snyk-agent-scan/
-27. Qu et al., "Tool Learning with Large Language Models: A Survey",
+21. Qu et al., "Tool Learning with Large Language Models: A Survey",
     cited in §1 — https://arxiv.org/abs/2405.17935
-28. Wang et al., "MINT: Evaluating LLMs in Multi-turn Interaction with
+22. Wang et al., "MINT: Evaluating LLMs in Multi-turn Interaction with
     Tools and Language Feedback" (ICLR 2024), cited in §1 —
     https://arxiv.org/abs/2309.10691
-29. Anthropic, "Introducing the Model Context Protocol" (announcement),
+23. Anthropic, "Introducing the Model Context Protocol" (announcement),
     cited in §1 — https://www.anthropic.com/news/model-context-protocol
-30. Model Context Protocol, "Architecture overview" (specification docs,
+24. Model Context Protocol, "Architecture overview" (specification docs,
     protocol revision 2026-07-28), cited in §1 —
     https://modelcontextprotocol.io/docs/concepts/architecture
-31. "Systematization of Knowledge: Security and Safety in the Model
+25. "Systematization of Knowledge: Security and Safety in the Model
     Context Protocol Ecosystem", cited in §1 —
     https://arxiv.org/abs/2512.08290
-32. Invariant Labs, "MCP Security Notification: Tool Poisoning Attacks"
+26. Invariant Labs, "MCP Security Notification: Tool Poisoning Attacks"
     (1 April 2025) — origin of both "tool poisoning" and "tool
     shadowing" as named MCP attacks, cited in §1 —
     https://invariantlabs.ai/blog/mcp-security-notification-tool-poisoning-attacks
-33. "MCPTox: A Benchmark for Tool Poisoning Attack on Real-World MCP
+27. "MCPTox: A Benchmark for Tool Poisoning Attack on Real-World MCP
     Servers", cited in §1 — https://arxiv.org/abs/2508.14925
-34. Greshake et al., "Not what you've signed up for: Compromising
+28. Greshake et al., "Not what you've signed up for: Compromising
     Real-World LLM-Integrated Applications with Indirect Prompt
     Injection" — origin of "indirect prompt injection" (general LLM
     context, predates MCP), cited in §1 —
     https://arxiv.org/abs/2302.12173
-35. "No-Box Vulnerability Analysis: Description-only Detection of
+29. "No-Box Vulnerability Analysis: Description-only Detection of
     Indirect Prompt Injection Vulnerabilities in MCP Servers", cited in
     §1 — https://arxiv.org/abs/2609.10854
-36. "Semantic Attacks on Tool-Augmented LLMs: Securing the Model Context
+30. "Semantic Attacks on Tool-Augmented LLMs: Securing the Model Context
     Protocol Against Descriptor-Level Manipulation", cited in §1 —
     https://arxiv.org/abs/2512.06556
-37. Radosevich and Halloran, "MCP Safety Audit: LLMs with the Model
+31. Radosevich and Halloran, "MCP Safety Audit: LLMs with the Model
     Context Protocol Allow Major Security Exploits", cited in §1 —
     https://arxiv.org/abs/2504.03767
-38. Model Context Protocol, "Authorization Security Considerations"
+32. Model Context Protocol, "Authorization Security Considerations"
     (specification docs, protocol revision 2026-07-28) — defines "Token
     Theft" and the "Confused Deputy Problem", cited in §1 —
     https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/security-considerations
-39. AlibabaCloudSecurity, GitHub issue #544 on
+33. AlibabaCloudSecurity, GitHub issue #544 on
     `modelcontextprotocol/modelcontextprotocol`, "The MCP protocol
     exhibits insufficient security design, which increases the risk of
     widespread phishing attacks" (18 May 2025) — first disclosed OAuth
     access-token theft exploit against major MCP clients, cited in §1 —
     https://github.com/modelcontextprotocol/modelcontextprotocol/issues/544
-40. OWASP MCP Top 10, MCP02:2025 – Privilege Escalation via Scope Creep,
+34. OWASP MCP Top 10, MCP02:2025 – Privilege Escalation via Scope Creep,
     cited in §1 —
     https://owasp.org/www-project-mcp-top-10/2025/MCP02-2025%E2%80%93Privilege-Escalation-via-Scope-Creep
-41. "We Urgently Need Privilege Management in MCP: A Measurement of API
+35. "We Urgently Need Privilege Management in MCP: A Measurement of API
     Usage in MCP Ecosystems", cited in §1 —
     https://arxiv.org/abs/2507.06250
+36. Ohm, Plate, Sykosch, and Meier, "Backstabber's Knife Collection: A
+    Review of Open Source Software Supply Chain Attacks" (DIMVA 2020),
+    cited in §2 — https://arxiv.org/abs/2005.09535
+37. npm, "Details about the event-stream incident" (27 November 2018),
+    cited in §2 —
+    https://blog.npmjs.org/post/180565383195/details-about-the-event-stream-incident
+38. A. Freund, "backdoor in upstream xz/liblzma leading to ssh server
+    compromise", oss-security mailing list (29 March 2024), and
+    CVE-2024-3094, cited in §2 —
+    https://www.openwall.com/lists/oss-security/2024/03/29/4 and
+    https://www.cve.org/CVERecord?id=CVE-2024-3094
+39. Acharya and Gupta, "A Formal Security Framework for MCP-Based AI
+    Agents: Threat Taxonomy, Verification Models, and Defense
+    Mechanisms", cited in §1, §3, §4 — https://arxiv.org/abs/2604.05969
+40. Trail of Bits, `mcp-context-protector`, source checked at commit
+    `05e56c1`, cited in §3 —
+    https://github.com/trailofbits/mcp-context-protector
+41. Docker, `mcp-gateway` (`pkg/gateway/pull.go`), source checked at
+    commit `a34df45`, cited in §3 — https://github.com/docker/mcp-gateway
+42. Stacklok, ToolHive (`pkg/runner/retriever/retriever.go`), source
+    checked at commit `2b299c1`, cited in §3 —
+    https://github.com/stacklok/toolhive
+43. Jing et al., "MCIP: Protecting MCP Safety via Model Contextual
+    Integrity Protocol" (EMNLP 2025), cited in §3 —
+    https://arxiv.org/abs/2505.14590
+44. Xing et al., "MCP-Guard: A Multi-Stage Defense-in-Depth Framework for
+    Securing Model Context Protocol in Agentic AI", cited in §3 —
+    https://arxiv.org/abs/2508.10991
+45. Wang et al., "MindGuard: Intrinsic Decision Inspection for Securing
+    LLM Agents Against Metadata Poisoning", cited in §3 —
+    https://arxiv.org/abs/2508.20412
+46. Bühler, Biagiola, Di Grazia, and Salvaneschi, "AgentBound: Securing
+    Execution Boundaries of AI Agents" (FSE 2026), cited in §3 —
+    https://arxiv.org/abs/2510.21236
+47. "MCPSecBench: A Systematic Security Benchmark and Playground for
+    Testing Model Context Protocols" — rug-pull mitigation rates for
+    MCIP and Firewalled Agentic Networks, cited in §3 —
+    https://arxiv.org/abs/2508.13220
