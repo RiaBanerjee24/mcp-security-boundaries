@@ -1,0 +1,24 @@
+services:
+  experiment_1:
+    build:
+      context: scripts/
+      dockerfile: experiment_1/Dockerfile
+    container_name: rugpull-exp1
+
+  experiment_2:
+    build:
+      context: scripts/
+      dockerfile: experiment_2/Dockerfile
+    container_name: rugpull-exp2
+
+  experiment_3:
+    build:
+      context: scripts/
+      dockerfile: experiment_3/Dockerfile
+    container_name: rugpull-exp3
+
+  experiment_4:
+    build:
+      context: scripts/
+      dockerfile: experiment_4/Dockerfile
+    container_name: rugpull-exp4
